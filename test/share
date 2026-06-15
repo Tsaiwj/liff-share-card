@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>轉分享保險名片</title>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    body { margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center; font-family: sans-serif; background: #f5f5f5; }
+    .box { width: 82%; max-width: 320px; background: #fff; border-radius: 12px; padding: 28px; text-align: center; box-shadow: 0 4px 18px rgba(0,0,0,.12); }
+    .text { font-weight: 700; color: #333; }
+    .error { display: none; margin-top: 14px; padding: 12px; color: #e63946; background: #fff0f0; border-radius: 8px; font-size: 13px; text-align: left; word-break: break-all; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="text" id="status">開啟通訊錄中...</div>
+    <div class="error" id="error"></div>
+  </div>
+
+  <script>
+    // ⚠️ 1. 請填入您的 LIFF ID
+    const LIFF_ID = "2010318197-hnza6yjp"; 
+
+    const statusEl = document.getElementById("status");
+    const errorEl = document.getElementById("error");
+
+    function showError(title, detail) {
+      statusEl.innerText = title;
+      statusEl.style.color = "#e63946";
+      errorEl.style.display = "block";
+      errorEl.innerHTML = detail;
+    }
+
+    async function main() {
+      try {
+        await liff.init({ liffId: LIFF_ID, withLoginOnExternalBrowser: true });
+
+        if (!liff.isLoggedIn()) {
+          if (!liff.isInClient()) {
+            liff.login({ redirectUri: window.location.href });
+          } else {
+            showError("LINE 尚未登入", "請關閉後重新從 LINE 內開啟。");
+          }
+          return;
+        }
+
+        // 🌟 這裡就是一模一樣的卡片排版程式碼！
+        const flexMessage = {
+          "type": "flex",
+          "altText": "這是一張保險名片",
+          "contents": {
+            "type": "bubble",
+            "body": {
+              "type": "box",
+              "layout": "vertical",
+              "contents": [
+                {
+                  "type": "image",
+                  // ⚠️ 2. 請把這裡換成您頭像的真實圖片網址 (建議用去背的圓形 PNG 圖檔會最完美)
+                  "url": "https://example.com/your-image.png",
+                  "size": "xl",
+                  "aspectMode": "cover",
+                  "aspectRatio": "1:1"
+                },
+                {
+                  "type": "text",
+                  "text": "測試用", // 您可以改成真實姓名
+                  "weight": "bold",
+                  "size": "xl",
+                  "align": "center",
+                  "margin": "md"
+                },
+                {
+                  "type": "box",
+                  "layout": "vertical",
+                  "margin": "md",
+                  "alignItems": "center",
+                  "contents": [
+                    {
+                      "type": "box",
+                      "layout": "vertical",
+                      "backgroundColor": "#6e7589", // 灰色橢圓形背景色
+                      "cornerRadius": "xl",
+                      "paddingStart": "md",
+                      "paddingEnd": "md",
+                      "paddingTop": "xs",
+                      "paddingBottom": "xs",
+                      "contents": [
+                        {
+                          "type": "text",
+                          "text": "保險",
+                          "color": "#ffffff",
+                          "size": "xs"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "text": "你好你好你好你好", // 您的自介或歡迎詞
+                  "align": "center",
+                  "wrap": true,
+                  "margin": "lg",
+                  "color": "#333333"
+                }
+              ]
+            },
+            "footer": {
+              "type": "box",
+              "layout": "vertical",
+              "contents": [
+                {
+                  "type": "button",
+                  "style": "link",
+                  "action": {
+                    "type": "uri",
+                    "label": "轉分享",
+                    // ⚠️ 3. 如果要讓收到名片的朋友也可以繼續轉分享，這裡放 LIFF 網址。
+                    // 💡 強烈建議：如果是傳給「新客戶」，按鈕改成「加我為好友」，並放上您的 LINE 加好友連結 (https://line.me/ti/p/...) 轉換率會更好！
+                    "uri": "https://liff.line.me/" + LIFF_ID 
+                  }
+                }
+              ]
+            }
+          }
+        };
+
+        if (!liff.isApiAvailable("shareTargetPicker")) {
+          showError("分享功能不可用", "請確認 LINE Developers 已啟用 Share Target Picker。");
+          return;
+        }
+
+        await liff.shareTargetPicker([flexMessage]);
+        
+        statusEl.innerText = "分享流程已完成！";
+        statusEl.style.color = "#28a745";
+
+        setTimeout(() => { if (liff.isInClient()) liff.closeWindow(); }, 1200);
+
+      } catch (err) {
+        showError("發生錯誤", String(err && err.message ? err.message : err));
+      }
+    }
+
+    main();
+  </script>
+</body>
+</html>
