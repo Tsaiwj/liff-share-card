@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>轉分享名片</title>
+  <title>轉分享保險名片</title>
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
     body { margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center; font-family: sans-serif; background: #f5f5f5; }
@@ -19,7 +19,6 @@
   </div>
 
   <script>
-    // ⚠️ 1. 請填入您的 LIFF ID
     const LIFF_ID = "2010318197-0tDLHOh7"; 
 
     const statusEl = document.getElementById("status");
@@ -45,7 +44,6 @@
           return;
         }
 
-        // 🌟 滿版大圖 + 浮動標籤 的卡片排版程式碼！
         const flexMessage = {
           "type": "flex",
           "altText": "這是一張測試名片",
@@ -54,23 +52,22 @@
             "hero": {
               "type": "box",
               "layout": "vertical",
-              "paddingAll": "0px", // 消除邊距讓圖片滿版
+              "paddingAll": "none", // 🌟 修正點：將 0px 改為 LINE 官方標準的 none
               "contents": [
                 {
                   "type": "image",
-                  // ⚠️ 2. 請換成您放在 GitHub 上的圖片網址！
                   "url": "https://tsaiwj.github.io/liff-share-card/test/%E5%A5%B31%20(1).jpg",
                   "size": "full",
-                  "aspectRatio": "20:13", // 這是這類版型最標準的長寬比
+                  "aspectRatio": "20:13",
                   "aspectMode": "cover"
                 },
                 {
                   "type": "box",
                   "layout": "vertical",
-                  "position": "absolute", // 🌟 關鍵：浮動疊加在圖片上
-                  "offsetTop": "12px",    // 距離上方 12px
-                  "offsetLeft": "12px",   // 距離左方 12px
-                  "backgroundColor": "#697285", // 灰色背景
+                  "position": "absolute",
+                  "offsetTop": "12px",
+                  "offsetLeft": "12px",
+                  "backgroundColor": "#697285",
                   "cornerRadius": "20px",
                   "paddingStart": "10px",
                   "paddingEnd": "10px",
@@ -79,7 +76,7 @@
                   "contents": [
                     {
                       "type": "text",
-                      "text": "測試", // 左上角標籤的文字
+                      "text": "測試",
                       "color": "#ffffff",
                       "size": "xs",
                       "align": "center"
@@ -94,13 +91,13 @@
               "contents": [
                 {
                   "type": "text",
-                  "text": "測試", // 大標題
+                  "text": "測試",
                   "weight": "bold",
                   "size": "xl"
                 },
                 {
                   "type": "text",
-                  "text": "測試", // 下方的灰色小字說明
+                  "text": "測試",
                   "color": "#666666",
                   "wrap": true,
                   "margin": "md"
@@ -117,7 +114,6 @@
                   "action": {
                     "type": "uri",
                     "label": "轉分享",
-                    // ⚠️ 3. 按鈕的動作設定
                     "uri": "https://liff.line.me/" + LIFF_ID 
                   }
                 }
@@ -131,12 +127,16 @@
           return;
         }
 
-        await liff.shareTargetPicker([flexMessage]);
+        // 🌟 升級點：加入測謊機，確認訊息是真的送出，還是被系統擋下
+        const shareResult = await liff.shareTargetPicker([flexMessage]);
         
-        statusEl.innerText = "分享流程已完成！";
-        statusEl.style.color = "#28a745";
-
-        setTimeout(() => { if (liff.isInClient()) liff.closeWindow(); }, 1200);
+        if (shareResult) {
+          statusEl.innerText = "分享流程已完成！";
+          statusEl.style.color = "#28a745";
+          setTimeout(() => { if (liff.isInClient()) liff.closeWindow(); }, 1200);
+        } else {
+          showError("發送被取消", "您取消了發送，或您的 App 尚未開啟 chat_message.write 權限！");
+        }
 
       } catch (err) {
         showError("發生錯誤", String(err && err.message ? err.message : err));
@@ -146,4 +146,5 @@
     main();
   </script>
 </body>
+</html>
 </html>
