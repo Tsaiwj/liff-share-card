@@ -74,22 +74,22 @@
         }
 
         // 🌟 已經將 statusEl.innerText = "正在讀取名片..."; 刪除
-        const flexMessage = await loadShareCard();
+       const shareResult = await liff.shareTargetPicker([flexMessage]);
 
-        statusEl.innerText = "正在開啟通訊錄...";
+if (!shareResult || shareResult.status !== "success") {
+  showError(
+    "發送被取消",
+    "您可能關閉了通訊錄，或沒有按下最後的傳送。"
+  );
+  return;
+}
 
-        if (!liff.isApiAvailable("shareTargetPicker")) {
-          showError("分享功能不可用", "請確認 LINE Developers 已啟用 Share Target Picker。");
-          return;
-        }
+statusEl.innerText = "分享流程已完成！";
+statusEl.style.color = "#28a745";
 
-        await liff.shareTargetPicker([flexMessage]);
-        statusEl.innerText = "分享流程已完成！";
-        statusEl.style.color = "#28a745";
-
-        setTimeout(() => {
-          if (liff.isInClient()) liff.closeWindow();
-        }, 1200);
+setTimeout(() => {
+  if (liff.isInClient()) liff.closeWindow();
+}, 1200);
 
       } catch (err) {
         showError("發生錯誤", String(err && err.message ? err.message : err));
