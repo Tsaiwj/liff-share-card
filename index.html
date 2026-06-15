@@ -74,7 +74,12 @@
         }
 
         // 🌟 已經將 statusEl.innerText = "正在讀取名片..."; 刪除
-       const shareResult = await liff.shareTargetPicker([flexMessage]);
+       // 🌟 已經將 statusEl.innerText = "正在讀取名片..."; 刪除
+const flexMessage = await loadShareCard();
+
+statusEl.innerText = "正在開啟通訊錄...";
+
+const shareResult = await liff.shareTargetPicker([flexMessage]);
 
 if (!shareResult || shareResult.status !== "success") {
   showError(
