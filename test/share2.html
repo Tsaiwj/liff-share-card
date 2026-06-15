@@ -1,15 +1,51 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-Hant">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>轉分享保險名片</title>
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
-    body { margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center; font-family: sans-serif; background: #f5f5f5; }
-    .box { width: 82%; max-width: 320px; background: #fff; border-radius: 12px; padding: 28px; text-align: center; box-shadow: 0 4px 18px rgba(0,0,0,.12); }
-    .text { font-weight: 700; color: #333; }
-    .error { display: none; margin-top: 14px; padding: 12px; color: #e63946; background: #fff0f0; border-radius: 8px; font-size: 13px; text-align: left; word-break: break-all; line-height: 1.5; }
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: sans-serif;
+      background: #f5f5f5;
+    }
+
+    .box {
+      width: 82%;
+      max-width: 320px;
+      background: #fff;
+      border-radius: 12px;
+      padding: 28px;
+      text-align: center;
+      box-shadow: 0 4px 18px rgba(0,0,0,.12);
+    }
+
+    .text {
+      font-weight: 700;
+      color: #333;
+    }
+
+    .error {
+      display: none;
+      margin-top: 14px;
+      padding: 12px;
+      color: #e63946;
+      background: #fff0f0;
+      border-radius: 8px;
+      font-size: 13px;
+      text-align: left;
+      word-break: break-word;
+      white-space: pre-wrap;
+      line-height: 1.5;
+    }
   </style>
 </head>
 <body>
@@ -19,102 +55,121 @@
   </div>
 
   <script>
-    const LIFF_ID = "2010318197-0tDLHOh7"; 
+    const LIFF_ID = "2010318197-0tDLHOh7";
+    const SHARE_URL = "https://liff.line.me/" + LIFF_ID;
+    const IMAGE_URL = "https://tsaiwj.github.io/liff-share-card/test/%E5%A5%B31%20%281%29.jpg";
 
     const statusEl = document.getElementById("status");
     const errorEl = document.getElementById("error");
 
     function showError(title, detail) {
-      statusEl.innerText = title;
+      statusEl.textContent = title;
       statusEl.style.color = "#e63946";
       errorEl.style.display = "block";
-      errorEl.innerHTML = detail;
+      errorEl.textContent = detail;
+    }
+
+    function getErrorText(err) {
+      const code = err && err.code ? "錯誤代碼：" + err.code + "\n" : "";
+      const message = err && err.message ? err.message : String(err);
+      return code + "錯誤訊息：" + message;
     }
 
     async function main() {
       try {
-        await liff.init({ liffId: LIFF_ID, withLoginOnExternalBrowser: true });
+        await liff.init({
+          liffId: LIFF_ID,
+          withLoginOnExternalBrowser: true
+        });
 
         if (!liff.isLoggedIn()) {
           if (!liff.isInClient()) {
             liff.login({ redirectUri: window.location.href });
           } else {
-            showError("LINE 尚未登入", "請關閉後重新從 LINE 內開啟。");
+            showError("LINE 尚未登入", "請關閉後，重新從 LINE 內開啟此頁面。");
           }
           return;
         }
 
+        if (!liff.isApiAvailable("shareTargetPicker")) {
+          showError(
+            "分享功能不可用",
+            "請確認 LINE Developers Console 已啟用 Share Target Picker，並使用支援的 LINE 環境開啟。"
+          );
+          return;
+        }
+
         const flexMessage = {
-          "type": "flex",
-          "altText": "這是一張測試名片",
-          "contents": {
-            "type": "bubble",
-            "hero": {
-              "type": "box",
-              "layout": "vertical",
-              "paddingAll": "none", // 🌟 修正點：將 0px 改為 LINE 官方標準的 none
-              "contents": [
+          type: "flex",
+          altText: "這是一張測試名片",
+          contents: {
+            type: "bubble",
+            hero: {
+              type: "box",
+              layout: "vertical",
+              paddingAll: "none",
+              contents: [
                 {
-                  "type": "image",
-                  "url": "https://tsaiwj.github.io/liff-share-card/test/%E5%A5%B31%20(1).jpg",
-                  "size": "full",
-                  "aspectRatio": "20:13",
-                  "aspectMode": "cover"
+                  type: "image",
+                  url: IMAGE_URL,
+                  size: "full",
+                  aspectRatio: "20:13",
+                  aspectMode: "cover"
                 },
                 {
-                  "type": "box",
-                  "layout": "vertical",
-                  "position": "absolute",
-                  "offsetTop": "12px",
-                  "offsetLeft": "12px",
-                  "backgroundColor": "#697285",
-                  "cornerRadius": "20px",
-                  "paddingStart": "10px",
-                  "paddingEnd": "10px",
-                  "paddingTop": "4px",
-                  "paddingBottom": "4px",
-                  "contents": [
+                  type: "box",
+                  layout: "vertical",
+                  position: "absolute",
+                  offsetTop: "12px",
+                  offsetStart: "12px",
+                  backgroundColor: "#697285",
+                  cornerRadius: "20px",
+                  paddingStart: "10px",
+                  paddingEnd: "10px",
+                  paddingTop: "4px",
+                  paddingBottom: "4px",
+                  contents: [
                     {
-                      "type": "text",
-                      "text": "測試",
-                      "color": "#ffffff",
-                      "size": "xs",
-                      "align": "center"
+                      type: "text",
+                      text: "測試",
+                      color: "#ffffff",
+                      size: "xs",
+                      align: "center"
                     }
                   ]
                 }
               ]
             },
-            "body": {
-              "type": "box",
-              "layout": "vertical",
-              "contents": [
+            body: {
+              type: "box",
+              layout: "vertical",
+              contents: [
                 {
-                  "type": "text",
-                  "text": "測試",
-                  "weight": "bold",
-                  "size": "xl"
+                  type: "text",
+                  text: "測試",
+                  weight: "bold",
+                  size: "xl"
                 },
                 {
-                  "type": "text",
-                  "text": "測試",
-                  "color": "#666666",
-                  "wrap": true,
-                  "margin": "md"
+                  type: "text",
+                  text: "測試",
+                  color: "#666666",
+                  wrap: true,
+                  margin: "md"
                 }
               ]
             },
-            "footer": {
-              "type": "box",
-              "layout": "vertical",
-              "contents": [
+            footer: {
+              type: "box",
+              layout: "vertical",
+              contents: [
                 {
-                  "type": "button",
-                  "style": "link",
-                  "action": {
-                    "type": "uri",
-                    "label": "轉分享",
-                    "uri": "https://liff.line.me/" + LIFF_ID 
+                  type: "button",
+                  style: "link",
+                  action: {
+                    type: "uri",
+                    label: "轉分享",
+                    uri: SHARE_URL
                   }
                 }
               ]
@@ -122,29 +177,34 @@
           }
         };
 
-        if (!liff.isApiAvailable("shareTargetPicker")) {
-          showError("分享功能不可用", "請確認 LINE Developers 已啟用 Share Target Picker。");
-          return;
-        }
+        const shareResult = await liff.shareTargetPicker([flexMessage], {
+          isMultiple: false
+        });
 
-        // 🌟 升級點：加入測謊機，確認訊息是真的送出，還是被系統擋下
-        const shareResult = await liff.shareTargetPicker([flexMessage]);
-        
-        if (shareResult) {
-          statusEl.innerText = "分享流程已完成！";
+        console.log("shareResult:", shareResult);
+
+        if (shareResult && shareResult.status === "success") {
+          statusEl.textContent = "分享流程已完成！";
           statusEl.style.color = "#28a745";
-          setTimeout(() => { if (liff.isInClient()) liff.closeWindow(); }, 1200);
+
+          setTimeout(function () {
+            if (liff.isInClient()) {
+              liff.closeWindow();
+            }
+          }, 1200);
         } else {
-          showError("發送被取消", "您取消了發送，或您的 App 尚未開啟 chat_message.write 權限！");
+          showError(
+            "發送被取消",
+            "您可能關閉了通訊錄，或沒有按下最後的傳送。"
+          );
         }
 
       } catch (err) {
-        showError("發生錯誤", String(err && err.message ? err.message : err));
+        showError("發生錯誤", getErrorText(err));
       }
     }
 
     main();
   </script>
 </body>
-</html>
 </html>
