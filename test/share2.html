@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>轉分享保險名片</title>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    body { margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center; font-family: sans-serif; background: #f5f5f5; }
+    .box { width: 82%; max-width: 320px; background: #fff; border-radius: 12px; padding: 28px; text-align: center; box-shadow: 0 4px 18px rgba(0,0,0,.12); }
+    .text { font-weight: 700; color: #333; }
+    .error { display: none; margin-top: 14px; padding: 12px; color: #e63946; background: #fff0f0; border-radius: 8px; font-size: 13px; text-align: left; word-break: break-all; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="text" id="status">開啟通訊錄中...</div>
+    <div class="error" id="error"></div>
+  </div>
+
+  <script>
+    // ⚠️ 1. 請填入您的 LIFF ID
+    const LIFF_ID = "2010318197-hnza6yjp"; 
+
+    const statusEl = document.getElementById("status");
+    const errorEl = document.getElementById("error");
+
+    function showError(title, detail) {
+      statusEl.innerText = title;
+      statusEl.style.color = "#e63946";
+      errorEl.style.display = "block";
+      errorEl.innerHTML = detail;
+    }
+
+    async function main() {
+      try {
+        await liff.init({ liffId: LIFF_ID, withLoginOnExternalBrowser: true });
+
+        if (!liff.isLoggedIn()) {
+          if (!liff.isInClient()) {
+            liff.login({ redirectUri: window.location.href });
+          } else {
+            showError("LINE 尚未登入", "請關閉後重新從 LINE 內開啟。");
+          }
+          return;
+        }
+
+        // 🌟 滿版大圖 + 浮動標籤 的卡片排版程式碼！
+        const flexMessage = {
+          "type": "flex",
+          "altText": "這是一張測試名片",
+          "contents": {
+            "type": "bubble",
+            "hero": {
+              "type": "box",
+              "layout": "vertical",
+              "paddingAll": "0px", // 消除邊距讓圖片滿版
+              "contents": [
+                {
+                  "type": "image",
+                  // ⚠️ 2. 請換成您放在 GitHub 上的圖片網址！
+                  "url": "https://tsaiwj.github.io/liff-share-card/test/%E5%A5%B31%20(1).jpg",
+                  "size": "full",
+                  "aspectRatio": "20:13", // 這是這類版型最標準的長寬比
+                  "aspectMode": "cover"
+                },
+                {
+                  "type": "box",
+                  "layout": "vertical",
+                  "position": "absolute", // 🌟 關鍵：浮動疊加在圖片上
+                  "offsetTop": "12px",    // 距離上方 12px
+                  "offsetLeft": "12px",   // 距離左方 12px
+                  "backgroundColor": "#697285", // 灰色背景
+                  "cornerRadius": "20px",
+                  "paddingStart": "10px",
+                  "paddingEnd": "10px",
+                  "paddingTop": "4px",
+                  "paddingBottom": "4px",
+                  "contents": [
+                    {
+                      "type": "text",
+                      "text": "測試", // 左上角標籤的文字
+                      "color": "#ffffff",
+                      "size": "xs",
+                      "align": "center"
+                    }
+                  ]
+                }
+              ]
+            },
+            "body": {
+              "type": "box",
+              "layout": "vertical",
+              "contents": [
+                {
+                  "type": "text",
+                  "text": "測試", // 大標題
+                  "weight": "bold",
+                  "size": "xl"
+                },
+                {
+                  "type": "text",
+                  "text": "測試", // 下方的灰色小字說明
+                  "color": "#666666",
+                  "wrap": true,
+                  "margin": "md"
+                }
+              ]
+            },
+            "footer": {
+              "type": "box",
+              "layout": "vertical",
+              "contents": [
+                {
+                  "type": "button",
+                  "style": "link",
+                  "action": {
+                    "type": "uri",
+                    "label": "轉分享",
+                    // ⚠️ 3. 按鈕的動作設定
+                    "uri": "https://liff.line.me/" + LIFF_ID 
+                  }
+                }
+              ]
+            }
+          }
+        };
+
+        if (!liff.isApiAvailable("shareTargetPicker")) {
+          showError("分享功能不可用", "請確認 LINE Developers 已啟用 Share Target Picker。");
+          return;
+        }
+
+        await liff.shareTargetPicker([flexMessage]);
+        
+        statusEl.innerText = "分享流程已完成！";
+        statusEl.style.color = "#28a745";
+
+        setTimeout(() => { if (liff.isInClient()) liff.closeWindow(); }, 1200);
+
+      } catch (err) {
+        showError("發生錯誤", String(err && err.message ? err.message : err));
+      }
+    }
+
+    main();
+  </script>
+</body>
+</html>
