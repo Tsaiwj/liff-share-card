@@ -1,107 +1,524 @@
 <!DOCTYPE html>
-<html>
+<!--
+Lucide icons: ISC License
+Copyright (c) 2026 Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+Feather-derived icons (chevron-left, chevron-right, info): MIT License
+Copyright (c) 2013-present Cole Bemis
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+<html lang="zh-Hant">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>轉分享保險名片</title>
-  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <title>轉分享名片</title>
+  <link rel="preconnect" href="https://static.line-scdn.net" crossorigin>
+  <link rel="preconnect" href="https://script.google.com">
+  <link rel="preconnect" href="https://script.googleusercontent.com">
   <style>
-    body { margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center; font-family: sans-serif; background: #f5f5f5; }
-    .box { width: 82%; max-width: 320px; background: #fff; border-radius: 12px; padding: 28px; text-align: center; box-shadow: 0 4px 18px rgba(0,0,0,.12); }
-    .text { font-weight: 700; color: #333; }
-    .error { display: none; margin-top: 14px; padding: 12px; color: #e63946; background: #fff0f0; border-radius: 8px; font-size: 13px; text-align: left; word-break: break-all; line-height: 1.5; }
+    :root { color-scheme: light; --ink: #232b29; --muted: #69736e; --line: #dfe5e1; --green: #14734e; --paper: #f5f7f6; }
+    * { box-sizing: border-box; letter-spacing: 0; }
+    [hidden] { display: none !important; }
+    body { margin: 0; color: var(--ink); background: var(--paper); font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "Noto Sans TC", sans-serif; padding-bottom: calc(112px + env(safe-area-inset-bottom)); }
+    button { font: inherit; cursor: pointer; touch-action: manipulation; }
+    button:disabled { cursor: default; }
+    button:focus-visible, [tabindex]:focus-visible { outline: 3px solid #76b8ec; outline-offset: 3px; }
+    .topbar { background: white; border-bottom: 1px solid var(--line); }
+    .topbar-inner, main, .actions-inner { max-width: 1040px; margin: auto; padding-inline: 24px; }
+    .topbar-inner { min-height: 76px; display: flex; align-items: center; gap: 12px; }
+    .brand-icon { color: var(--green); width: 25px; height: 25px; flex: none; }
+    h1 { font-size: 20px; line-height: 1.4; margin: 0; font-weight: 700; }
+    h2 { font-size: 16px; margin: 0; }
+    .topbar .icon-button { margin-left: auto; }
+    .icon-button { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; flex: none; border: 1px solid var(--line); background: white; border-radius: 6px; color: #47554d; }
+    .icon-button:hover:not(:disabled) { background: #eaf2ee; border-color: #adc9b8; }
+    .icon-button:disabled { opacity: .4; }
+    .icon { width: 19px; height: 19px; flex: none; }
+    main { padding-top: 24px; }
+    .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .navigation { display: flex; align-items: center; gap: 8px; }
+    .counter { width: 56px; text-align: center; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+    .notice { display: flex; gap: 8px; color: #67736c; margin: 0 0 20px; font-size: 13px; align-items: flex-start; }
+    .notice .icon { width: 16px; height: 16px; margin-top: 3px; }
+    .track { display: flex; align-items: flex-start; justify-content: safe center; gap: 20px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: thin; padding: 6px 4px 18px; overscroll-behavior-x: contain; }
+    .card { flex: 0 0 300px; width: 300px; max-width: calc(100vw - 64px); border: 1px solid #d9e1dc; border-radius: 8px; background: white; overflow: hidden; scroll-snap-align: center; box-shadow: 0 2px 5px #263e2f08; }
+    .card-section { padding: 20px; }
+    .flex-box { display: flex; min-width: 0; }
+    .flex-text { margin: 0; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; line-height: 1.5; }
+    .flex-button { display: flex; align-items: center; justify-content: center; min-height: 40px; padding: 9px 12px; font-size: 14px; line-height: 1.5; text-align: center; border-radius: 4px; overflow-wrap: anywhere; font-weight: 500; }
+    .image-wrap { position: relative; width: 100%; overflow: hidden; background: #edf1ef; }
+    .image-wrap img { width: 100%; height: 100%; display: block; object-fit: cover; }
+    .image-error { display: flex; align-items: center; justify-content: center; padding: 24px; height: 100%; font-size: 13px; color: var(--muted); }
+    .summary { border-top: 1px solid var(--line); padding: 20px 0 12px; margin-top: 10px; }
+    .summary h2 { font-size: 13px; color: var(--muted); font-weight: 500; margin-bottom: 6px; }
+    .summary p { margin: 0; font-size: 15px; overflow-wrap: anywhere; white-space: pre-wrap; }
+    .empty-state { min-height: 330px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 14px; color: var(--muted); }
+    .spinner { width: 26px; height: 26px; border: 3px solid #dde9e1; border-top-color: var(--green); border-radius: 50%; animation: turn .9s linear infinite; }
+    @keyframes turn { to { transform: rotate(360deg); } }
+    .error { margin: 20px 0; padding: 12px 16px; border-left: 3px solid #bc3d34; background: #fff0ee; color: #8e332c; overflow-wrap: anywhere; }
+    .error p { margin: 0 0 10px; white-space: pre-wrap; }
+    .secondary { border: 1px solid #c6d2cb; color: #3f5046; background: white; border-radius: 6px; padding: 8px 14px; font-weight: 600; }
+    .secondary:disabled { opacity: .5; }
+    .actions { position: fixed; inset: auto 0 0; background: #fffffff7; border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); z-index: 10; }
+    .actions-inner { min-height: 88px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-block: 16px; }
+    .status { color: var(--muted); font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+    .status.success { color: var(--green); }
+    .action-buttons { display: flex; gap: 10px; flex: none; }
+    .primary { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 48px; min-width: 228px; padding: 12px 20px; border: 0; border-radius: 6px; font-weight: 650; color: white; background: var(--green); }
+    .primary:hover:not(:disabled) { background: #0d603e; }
+    .primary:disabled { background: #d7dfda; color: #78857b; }
+    .image-warning { color: #8d5a20; font-size: 13px; margin: 10px 0; }
+    @media (max-width: 640px) {
+      body { padding-bottom: calc(146px + env(safe-area-inset-bottom)); }
+      .topbar-inner, main, .actions-inner { padding-inline: 18px; }
+      .topbar-inner { min-height: 64px; }
+      main { padding-top: 18px; }
+      .track { justify-content: flex-start; gap: 14px; margin-inline: -6px; padding-inline: 6px; }
+      .track.single { justify-content: center; }
+      .card { flex-basis: min(300px, calc(100vw - 64px)); }
+      .actions-inner { flex-direction: column; align-items: stretch; gap: 10px; padding-block: 12px; }
+      .action-buttons { width: 100%; }
+      .primary { width: 100%; min-width: 0; }
+      .status { text-align: center; }
+      .notice { margin-bottom: 14px; }
+      .navigation { gap: 3px; }
+      .navigation .icon-button { width: 34px; height: 34px; }
+    }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
   </style>
 </head>
 <body>
-  <div class="box">
-    <div class="text" id="status">開啟通訊錄中...</div>
-    <div class="error" id="error"></div>
-  </div>
-
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand-icon" data-icon="share"></span>
+      <h1>轉分享名片</h1>
+      <button id="reload" class="icon-button" type="button" title="重新讀取名片" aria-label="重新讀取名片" disabled><span data-icon="refresh"></span></button>
+    </div>
+  </header>
+  <main>
+    <div class="section-heading">
+      <h2>卡片預覽</h2>
+      <div class="navigation" id="navigation" hidden>
+        <button class="icon-button" id="previous" type="button" title="上一張卡片" aria-label="上一張卡片"><span data-icon="left"></span></button>
+        <span class="counter" id="counter">1 / 1</span>
+        <button class="icon-button" id="next" type="button" title="下一張卡片" aria-label="下一張卡片"><span data-icon="right"></span></button>
+      </div>
+    </div>
+    <p class="notice"><span data-icon="info"></span><span>網頁預覽可能因裝置、字型或 LINE 版本而有排版差異，實際呈現以 LINE 收到的卡片為準。</span></p>
+    <div id="empty" class="empty-state" aria-live="polite"><span class="spinner" id="spinner" aria-hidden="true"></span><span id="emptyText">正在讀取名片…</span></div>
+    <div id="error" class="error" role="alert" hidden><p id="errorText"></p><button id="retry" class="secondary" type="button">重新讀取</button></div>
+    <div id="track" class="track" role="region" aria-label="即將分享的名片" tabindex="0" hidden></div>
+    <p id="imageWarning" class="image-warning" hidden>部分圖片無法預覽，請確認圖片網址與公開權限後再分享。</p>
+    <section id="summary" class="summary" hidden><h2>分享摘要</h2><p id="summaryText"></p></section>
+  </main>
+  <footer class="actions">
+    <div class="actions-inner">
+      <div id="status" class="status" role="status" aria-live="polite">正在連接 LINE 與讀取名片…</div>
+      <div class="action-buttons">
+        <button id="close" class="secondary" type="button" hidden>關閉</button>
+        <button id="share" class="primary" type="button" disabled><span data-icon="share"></span><span id="shareLabel">選擇好友並分享</span></button>
+      </div>
+    </div>
+  </footer>
   <script>
-    const LIFF_ID = "2010318197-Y1xKbLOf";
-    const GAS_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxxN1qxktwQZMB1Edmb89EQLaCPwoQADp1IsEh2l9R_JKICCcKaro7PmaylzUSMi9YEUg/exec";
+    'use strict';
+    // Each customer's existing LIFF ID and /exec URL must remain paired.
+    const LIFF_ID = '2010318197-Y1xKbLOf';
+    const GAS_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbxxN1qxktwQZMB1Edmb89EQLaCPwoQADp1IsEh2l9R_JKICCcKaro7PmaylzUSMi9YEUg/exec';
+    const READ_TIMEOUT_MS = 30000;
+    const SDK_URL = 'https://static.line-scdn.net/liff/edge/2/sdk.js';
+    const $ = id => document.getElementById(id);
+    const state = { generation: 0, controller: null, message: null, lineReady: false, dataLoading: false, lineLoading: false, sharing: false, dataError: '', lineError: '', notice: '', success: false };
+    let sdkPromise = null;
+    let linePromise = null;
+    let callbackSequence = 0;
+    let slowTimer = null;
 
-    const statusEl = document.getElementById("status");
-    const errorEl = document.getElementById("error");
+    // Lucide icons (ISC license), bundled to avoid another network dependency.
+    const icons = {
+      share: [['circle', {cx:18,cy:5,r:3}],['circle',{cx:6,cy:12,r:3}],['circle',{cx:18,cy:19,r:3}],['line',{x1:8.59,x2:15.42,y1:13.51,y2:17.49}],['line',{x1:15.41,x2:8.59,y1:6.51,y2:10.49}]],
+      refresh: [['path',{d:'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8'}],['path',{d:'M21 3v5h-5'}],['path',{d:'M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16'}],['path',{d:'M8 16H3v5'}]],
+      left: [['path',{d:'m15 18-6-6 6-6'}]], right: [['path',{d:'m9 18 6-6-6-6'}]],
+      info: [['circle',{cx:12,cy:12,r:10}],['path',{d:'M12 16v-4'}],['path',{d:'M12 8h.01'}]]
+    };
+    document.querySelectorAll('[data-icon]').forEach(host => {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      const attributes = {viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':2,'stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true',class:'icon'};
+      Object.entries(attributes).forEach(([key, value]) => svg.setAttribute(key, value));
+      if (host.className) svg.setAttribute('class', 'icon ' + host.className);
+      icons[host.dataset.icon].forEach(([tag, attrs]) => {
+        const element = document.createElementNS(svg.namespaceURI, tag);
+        Object.entries(attrs).forEach(([key,value]) => element.setAttribute(key,value));
+        svg.appendChild(element);
+      });
+      host.replaceWith(svg);
+    });
 
-    function showError(title, detail) {
-      statusEl.innerText = title;
-      statusEl.style.color = "#e63946";
-      errorEl.style.display = "block";
-      errorEl.innerHTML = detail;
+    function errorText(error) {
+      const code = error && error.code ? '[' + String(error.code) + '] ' : '';
+      return code + String(error && error.message ? error.message : error || '發生未知錯誤');
     }
-
-    function loadShareCard() {
+    function timeout(promise, ms, message) {
       return new Promise((resolve, reject) => {
-        const callbackName = "receiveFlex_" + Date.now();
-
-        window[callbackName] = function(data) {
-          delete window[callbackName];
-          script.remove();
-
-          if (!data || !data.ok) {
-            reject("GAS 回傳資料失敗");
-            return;
-          }
-
-          resolve(data.flexMessage);
-        };
-
-        const script = document.createElement("script");
-        script.src = GAS_WEBAPP_URL + "?action=getShareCard&prefix=" + callbackName + "&v=" + Date.now();
-        script.onerror = () => reject("無法連線到 GAS Web App");
-        document.head.appendChild(script);
-
-        setTimeout(() => reject("讀取 GAS 名片資料逾時"), 15000);
+        const timer = setTimeout(() => reject(new Error(message)), ms);
+        promise.then(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); });
       });
     }
-
-    async function main() {
-      try {
-        await liff.init({
-          liffId: LIFF_ID,
-          withLoginOnExternalBrowser: true
-        });
-
-        if (!liff.isLoggedIn()) {
-          if (!liff.isInClient()) {
-            liff.login({ redirectUri: window.location.href });
-          } else {
-            showError("LINE 尚未登入", "請關閉後重新從 LINE 內開啟。");
-          }
-          return;
+    function loadSdk() {
+      if (window.liff) return Promise.resolve(window.liff);
+      if (sdkPromise) return sdkPromise;
+      sdkPromise = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        let timer;
+        function finish(error) {
+          clearTimeout(timer);
+          script.onload = script.onerror = null;
+          script.remove();
+          if (error) reject(error); else resolve(window.liff);
         }
-
-        // 🌟 已經將 statusEl.innerText = "正在讀取名片..."; 刪除
-       // 🌟 已經將 statusEl.innerText = "正在讀取名片..."; 刪除
-const flexMessage = await loadShareCard();
-
-statusEl.innerText = "正在開啟通訊錄...";
-
-const shareResult = await liff.shareTargetPicker([flexMessage]);
-
-if (!shareResult || shareResult.status !== "success") {
-  showError(
-    "發送被取消",
-    "您可能關閉了通訊錄，或沒有按下最後的傳送。"
-  );
-  return;
-}
-
-statusEl.innerText = "分享流程已完成！";
-statusEl.style.color = "#28a745";
-
-setTimeout(() => {
-  if (liff.isInClient()) liff.closeWindow();
-}, 1200);
-
-      } catch (err) {
-        showError("發生錯誤", String(err && err.message ? err.message : err));
+        script.async = true;
+        script.src = SDK_URL;
+        script.onload = () => finish(window.liff ? null : new Error('LINE 元件載入失敗，請重新連線。'));
+        script.onerror = () => finish(new Error('無法載入 LINE 元件，請檢查網路後再試。'));
+        timer = setTimeout(() => finish(new Error('連接 LINE 逾時，請重新連線。')), READ_TIMEOUT_MS);
+        document.head.appendChild(script);
+      }).catch(error => { sdkPromise = null; throw error; });
+      return sdkPromise;
+    }
+    function prepareLine() {
+      if (!linePromise) {
+        linePromise = loadSdk().then(liff => liff.init({ liffId: LIFF_ID, withLoginOnExternalBrowser: true }))
+          .then(() => {
+            if (!liff.isLoggedIn()) throw new Error('LINE 尚未登入，請關閉後從 LINE 重新開啟。');
+            if (!liff.isApiAvailable('shareTargetPicker')) throw new Error('目前無法使用 LINE 分享，請確認 LINE 版本及分享功能設定。');
+            return window.liff;
+          }).catch(error => { linePromise = null; throw error; });
+      }
+      return timeout(linePromise, READ_TIMEOUT_MS, 'LINE 初始化逾時，請重新連線。');
+    }
+    function loadShareCard(signal) {
+      return new Promise((resolve, reject) => {
+        if (signal.aborted) { reject(new DOMException('Cancelled', 'AbortError')); return; }
+        const callbackName = 'receiveFlex_' + Date.now() + '_' + (++callbackSequence);
+        const script = document.createElement('script');
+        let settled = false;
+        let timer;
+        function finish(error, value) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          signal.removeEventListener('abort', abort);
+          script.onerror = null;
+          script.remove();
+          // Ignore a late JSONP response after timeout/abort, then release its global.
+          if (error) {
+            window[callbackName] = () => {};
+            setTimeout(() => { delete window[callbackName]; }, READ_TIMEOUT_MS);
+          } else delete window[callbackName];
+          if (error) reject(error); else resolve(value);
+        }
+        function abort() { finish(new DOMException('Cancelled', 'AbortError')); }
+        window[callbackName] = data => {
+          try {
+            if (!data || data.ok !== true) throw new Error('Google 回傳資料失敗，請重新讀取。');
+            const message = validateMessage(data.flexMessage);
+            finish(null, message);
+          } catch (error) { finish(error); }
+        };
+        const url = new URL(GAS_WEBAPP_URL);
+        url.searchParams.set('action', 'getShareCard');
+        url.searchParams.set('prefix', callbackName);
+        url.searchParams.set('v', String(Date.now()));
+        script.src = url.href;
+        script.async = true;
+        script.dataset.shareRequest = callbackName;
+        script.onerror = () => finish(new Error('無法連線到 Google 名片服務，請檢查網路後重試。'));
+        signal.addEventListener('abort', abort, { once: true });
+        timer = setTimeout(() => finish(new Error('讀取名片超過 30 秒，請重新讀取；不會自動傳送任何訊息。')), READ_TIMEOUT_MS);
+        document.head.appendChild(script);
+      });
+    }
+    function safeUrl(value, image) {
+      try {
+        const url = new URL(value);
+        if (url.username || url.password) return false;
+        return image ? url.protocol === 'https:' : ['https:', 'http:', 'tel:', 'line:'].includes(url.protocol);
+      } catch { return false; }
+    }
+    function bubblesOf(message) { return message.contents.type === 'carousel' ? message.contents.contents : [message.contents]; }
+    function validateMessage(value) {
+      if (!value || value.type !== 'flex' || typeof value.altText !== 'string' || !value.altText.trim() || value.altText.length > 1500 || !value.contents) {
+        throw new Error('未取得有效名片。請確認「把我推薦給好友」工作表與 Google 部署設定。');
+      }
+      if (!['bubble', 'carousel'].includes(value.contents.type)) throw new Error('名片格式不正確。');
+      const bubbles = bubblesOf(value);
+      if (!Array.isArray(bubbles) || !bubbles.length || bubbles.length > 12) throw new Error('名片張數不正確。');
+      let nodes = 0;
+      function visit(node, depth) {
+        if (!node || typeof node !== 'object' || ++nodes > 1500 || depth > 16) throw new Error('名片內容過於複雜或格式錯誤。');
+        if (node.action && (node.action.type !== 'uri' || !safeUrl(node.action.uri, false))) throw new Error('名片含有不支援的按鈕連結，請先確認工作表內容。');
+        switch (node.type) {
+          case 'box':
+            if (!['vertical', 'horizontal', 'baseline'].includes(node.layout) || !Array.isArray(node.contents)) throw new Error('名片區塊格式不正確。');
+            node.contents.forEach(child => visit(child, depth + 1)); break;
+          case 'text':
+            if (typeof node.text !== 'string' || !node.text.trim()) throw new Error('名片含有空白文字，請確認工作表。');
+            break;
+          case 'button':
+            if (!node.action || !node.action.label) throw new Error('名片按鈕資料不完整。');
+            break;
+          case 'image': case 'icon':
+            if (!safeUrl(node.url, true)) throw new Error('名片圖片必須使用有效的 HTTPS 網址。');
+            break;
+          case 'separator': case 'spacer': case 'filler': break;
+          default: throw new Error('此名片含有尚不支援預覽的元件，請聯絡管理員。');
+        }
+      }
+      bubbles.forEach(bubble => {
+        if (!bubble || bubble.type !== 'bubble' || (!bubble.body && !bubble.hero)) throw new Error('名片卡片資料不完整。');
+        for (const section of ['header', 'hero', 'body', 'footer']) if (bubble[section]) visit(bubble[section], 0);
+      });
+      // Use the same snapshot for both the preview and shareTargetPicker.
+      return JSON.parse(JSON.stringify(value));
+    }
+    const spacing = { none: 0, xs: 2, sm: 4, md: 8, lg: 12, xl: 16, xxl: 20 };
+    const sizes = { xxs: 11, xs: 12, sm: 13, md: 15, lg: 18, xl: 20, xxl: 24, '3xl': 28, '4xl': 32, '5xl': 40 };
+    const color = value => typeof value === 'string' && /^#[\da-f]{6}([\da-f]{2})?$/i.test(value) ? value : '';
+    function length(value, map, fallback) {
+      if (Object.prototype.hasOwnProperty.call(map, value)) return map[value];
+      return typeof value === 'string' && /^\d+(\.\d+)?px$/.test(value) ? Math.min(parseFloat(value), 120) : fallback;
+    }
+    function renderNode(node, generation, hero) {
+      let element;
+      if (node.type === 'box') {
+        element = document.createElement('div');
+        element.className = 'flex-box';
+        element.style.flexDirection = node.layout === 'vertical' ? 'column' : 'row';
+        node.contents.forEach((child, index) => {
+          const rendered = renderNode(child, generation, false);
+          rendered.style.marginTop = '';
+          rendered.style[node.layout === 'vertical' ? 'marginTop' : 'marginLeft'] = length(child.margin, spacing, index ? length(node.spacing, spacing, 0) : 0) + 'px';
+          element.appendChild(rendered);
+        });
+      } else if (node.type === 'text') {
+        element = document.createElement('p');
+        element.className = 'flex-text';
+        element.textContent = node.text;
+        element.style.fontSize = length(node.size, sizes, 15) + 'px';
+        element.style.fontWeight = node.weight === 'bold' ? '700' : '400';
+        element.style.textAlign = ['start', 'end', 'center'].includes(node.align) ? node.align : 'start';
+        element.style.color = color(node.color) || '#333333';
+      } else if (node.type === 'button') {
+        element = document.createElement('div');
+        element.className = 'flex-button';
+        element.textContent = node.action.label;
+        element.title = '名片按鈕預覽';
+        element.style.background = node.style === 'primary' ? color(node.color) || '#14734e' : '#f0f4f1';
+        element.style.color = node.style === 'primary' ? '#ffffff' : color(node.color) || '#14734e';
+      } else if (node.type === 'image' || node.type === 'icon') {
+        element = document.createElement('div');
+        element.className = 'image-wrap';
+        const ratio = typeof node.aspectRatio === 'string' && node.aspectRatio.match(/^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/);
+        element.style.aspectRatio = ratio && Number(ratio[1]) > 0 && Number(ratio[2]) > 0 ? ratio[1] + '/' + ratio[2] : '1/1';
+        const image = document.createElement('img');
+        image.alt = '名片圖片';
+        image.decoding = 'async';
+        image.loading = hero ? 'eager' : 'lazy';
+        image.style.objectFit = node.aspectMode === 'fit' ? 'contain' : 'cover';
+        image.addEventListener('error', () => {
+          if (generation !== state.generation) return;
+          const fallback = document.createElement('div');
+          fallback.className = 'image-error';
+          fallback.textContent = '圖片暫時無法顯示';
+          element.replaceChildren(fallback);
+          $('imageWarning').hidden = false;
+        }, { once: true });
+        image.src = node.url;
+        element.appendChild(image);
+      } else if (node.type === 'separator') {
+        element = document.createElement('div');
+        element.style.borderTop = '1px solid ' + (color(node.color) || '#e2e5e3');
+      } else {
+        element = document.createElement('div');
+        element.style.minHeight = length(node.size, spacing, 8) + 'px';
+      }
+      if (node.margin) element.style.marginTop = length(node.margin, spacing, 0) + 'px';
+      if (node.backgroundColor && color(node.backgroundColor)) element.style.backgroundColor = node.backgroundColor;
+      return element;
+    }
+    function renderPreview(message, generation) {
+      const bubbles = bubblesOf(message);
+      const fragment = document.createDocumentFragment();
+      bubbles.forEach((bubble, index) => {
+        const article = document.createElement('article');
+        article.className = 'card';
+        article.setAttribute('aria-label', '第 ' + (index + 1) + ' 張名片');
+        for (const section of ['header', 'hero', 'body', 'footer']) {
+          if (!bubble[section]) continue;
+          const element = renderNode(bubble[section], generation, section === 'hero' && index === 0);
+          if (section !== 'hero') element.classList.add('card-section');
+          article.appendChild(element);
+        }
+        fragment.appendChild(article);
+      });
+      $('track').replaceChildren(fragment);
+      $('track').classList.toggle('single', bubbles.length === 1);
+      $('track').hidden = false;
+      $('track').scrollLeft = 0;
+      $('summaryText').textContent = message.altText;
+      $('summary').hidden = false;
+      $('navigation').hidden = bubbles.length < 2;
+      updateNavigation();
+    }
+    function updateNavigation() {
+      const track = $('track');
+      const cards = Array.from(track.children);
+      if (!cards.length) return;
+      const left = track.getBoundingClientRect().left;
+      const active = cards.reduce((best, card, index) => Math.abs(card.getBoundingClientRect().left - left) < Math.abs(cards[best].getBoundingClientRect().left - left) ? index : best, 0);
+      $('counter').textContent = (active + 1) + ' / ' + cards.length;
+      $('previous').disabled = track.scrollLeft <= 2;
+      $('next').disabled = track.scrollLeft >= track.scrollWidth - track.clientWidth - 2;
+      track.dataset.active = String(active);
+    }
+    function moveCard(direction) {
+      const track = $('track');
+      const active = Number(track.dataset.active || 0);
+      const card = track.children[Math.max(0, Math.min(track.children.length - 1, active + direction))];
+      if (card) track.scrollTo({ left: track.scrollLeft + card.getBoundingClientRect().left - track.getBoundingClientRect().left - 6, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    }
+    function updateUi() {
+      const loading = state.dataLoading || state.lineLoading;
+      const failure = state.dataError || state.lineError;
+      $('share').disabled = !state.message || !state.lineReady || loading || state.sharing || !!failure;
+      $('reload').disabled = loading || state.sharing;
+      $('retry').disabled = state.sharing;
+      $('retry').textContent = state.dataError ? '重新讀取' : '重新連線';
+      $('empty').hidden = !!state.message;
+      $('spinner').hidden = !loading;
+      $('emptyText').textContent = failure ? '暫時無法完成載入' : '正在讀取名片…';
+      $('error').hidden = !failure;
+      $('errorText').textContent = failure;
+      $('shareLabel').textContent = state.sharing ? '正在開啟 LINE…' : state.success ? '再次分享' : '選擇好友並分享';
+      $('status').classList.toggle('success', state.success);
+      $('status').textContent = state.sharing ? '請在 LINE 選擇對象並確認傳送。' : failure ? '目前無法繼續分享，請查看上方提示。' : state.notice || (state.dataLoading ? '正在讀取名片…' : state.lineLoading ? '名片已載入，正在連接 LINE…' : '已載入 ' + (state.message ? bubblesOf(state.message).length : 0) + ' 張名片');
+      $('close').hidden = !state.success || !window.liff || !liff.isInClient();
+      if (!loading) { clearTimeout(slowTimer); slowTimer = null; }
+    }
+    async function start() {
+      if (state.sharing) return;
+      const generation = ++state.generation;
+      if (state.controller) state.controller.abort();
+      state.controller = new AbortController();
+      state.message = null;
+      state.dataLoading = true;
+      state.lineLoading = true;
+      state.lineReady = false;
+      state.dataError = state.lineError = state.notice = '';
+      state.success = false;
+      $('track').hidden = $('summary').hidden = $('imageWarning').hidden = true;
+      $('navigation').hidden = true;
+      clearTimeout(slowTimer);
+      slowTimer = setTimeout(() => {
+        if (generation === state.generation && (state.dataLoading || state.lineLoading)) {
+          state.notice = '連線較慢，仍在讀取中，請稍候…';
+          updateUi();
+        }
+      }, 10000);
+      updateUi();
+      // Independent public-card loading and LINE initialization run concurrently.
+      const dataTask = loadShareCard(state.controller.signal).then(message => {
+        if (generation !== state.generation) return;
+        state.message = message;
+        renderPreview(message, generation);
+      }).catch(error => {
+        if (generation === state.generation && error.name !== 'AbortError') state.dataError = errorText(error);
+      }).finally(() => {
+        if (generation === state.generation) { state.dataLoading = false; state.notice = ''; updateUi(); }
+      });
+      const lineTask = prepareLine().then(() => {
+        if (generation === state.generation) state.lineReady = true;
+      }).catch(error => {
+        if (generation === state.generation) state.lineError = errorText(error);
+      }).finally(() => {
+        if (generation === state.generation) { state.lineLoading = false; updateUi(); }
+      });
+      await Promise.allSettled([dataTask, lineTask]);
+    }
+    async function share() {
+      if ($('share').disabled || state.sharing || !state.message) return;
+      state.sharing = true;
+      state.success = false;
+      state.notice = '';
+      updateUi();
+      try {
+        if (!liff.isLoggedIn() || !liff.isApiAvailable('shareTargetPicker')) {
+          state.lineReady = false;
+          linePromise = null;
+          throw new Error('LINE 登入或分享狀態已失效，請重新連線。');
+        }
+        const result = await liff.shareTargetPicker([state.message]);
+        if (result && result.status === 'success') {
+          state.success = true;
+          state.notice = '分享完成，謝謝您的推薦。';
+        } else if (!result) {
+          state.notice = '已取消分享，名片仍保留在此頁。';
+        } else throw new Error('無法確認分享結果，請先查看聊天室，避免重複傳送。');
+      } catch (error) {
+        state.lineError = errorText(error);
+      } finally {
+        state.sharing = false;
+        updateUi();
       }
     }
-
-    main();
+    $('reload').addEventListener('click', start);
+    $('retry').addEventListener('click', start);
+    $('share').addEventListener('click', share);
+    $('previous').addEventListener('click', () => moveCard(-1));
+    $('next').addEventListener('click', () => moveCard(1));
+    $('track').addEventListener('scroll', updateNavigation, { passive: true });
+    $('track').addEventListener('keydown', event => {
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); moveCard(event.key === 'ArrowLeft' ? -1 : 1); }
+    });
+    window.addEventListener('resize', updateNavigation);
+    $('close').addEventListener('click', () => { if (window.liff && liff.isInClient()) liff.closeWindow(); });
+    window.addEventListener('pagehide', () => {
+      state.generation++;
+      if (state.controller) state.controller.abort();
+      clearTimeout(slowTimer);
+    });
+    window.addEventListener('pageshow', event => { if (event.persisted) start(); });
+    start();
   </script>
 </body>
 </html>
