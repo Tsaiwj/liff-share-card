@@ -41,7 +41,7 @@ SOFTWARE.
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
-  <title>轉分享名片</title>
+  <title>轉分享LINE名片</title>
   <link rel="preconnect" href="https://static.line-scdn.net" crossorigin>
   <link rel="preconnect" href="https://script.google.com">
   <link rel="preconnect" href="https://script.googleusercontent.com">
@@ -58,6 +58,7 @@ SOFTWARE.
     .topbar-inner { min-height: 76px; display: flex; align-items: center; gap: 12px; }
     .brand-icon { color: var(--green); width: 25px; height: 25px; flex: none; }
     h1 { font-size: 20px; line-height: 1.4; margin: 0; font-weight: 700; }
+    .line-name { color: #06c755; }
     h2 { font-size: 16px; margin: 0; }
     .topbar .icon-button { margin-left: auto; }
     .icon-button { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; flex: none; border: 1px solid var(--line); background: white; border-radius: 6px; color: #47554d; }
@@ -82,6 +83,7 @@ SOFTWARE.
     .summary { border-top: 1px solid var(--line); padding: 20px 0 12px; margin-top: 10px; }
     .summary h2 { font-size: 13px; color: var(--muted); font-weight: 500; margin-bottom: 6px; }
     .summary p { margin: 0; font-size: 15px; overflow-wrap: anywhere; white-space: pre-wrap; }
+    .summary .summary-brand { margin-top: 48px; font-size: 13px; text-align: right; color: #a0a6a3; }
     .empty-state { min-height: 330px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 14px; color: var(--muted); }
     .spinner { width: 26px; height: 26px; border: 3px solid #dde9e1; border-top-color: var(--green); border-radius: 50%; animation: turn .9s linear infinite; }
     @keyframes turn { to { transform: rotate(360deg); } }
@@ -121,7 +123,7 @@ SOFTWARE.
   <header class="topbar">
     <div class="topbar-inner">
       <span class="brand-icon" data-icon="share"></span>
-      <h1>轉分享名片</h1>
+      <h1>轉分享<span class="line-name">LINE</span>名片</h1>
       <button id="reload" class="icon-button" type="button" title="重新讀取名片" aria-label="重新讀取名片" disabled><span data-icon="refresh"></span></button>
     </div>
   </header>
@@ -139,7 +141,11 @@ SOFTWARE.
     <div id="error" class="error" role="alert" hidden><p id="errorText"></p><button id="retry" class="secondary" type="button">重新讀取</button></div>
     <div id="track" class="track" role="region" aria-label="即將分享的名片" tabindex="0" hidden></div>
     <p id="imageWarning" class="image-warning" hidden>部分圖片無法預覽，請確認圖片網址與公開權限後再分享。</p>
-    <section id="summary" class="summary" hidden><h2>分享摘要</h2><p id="summaryText"></p></section>
+    <section id="summary" class="summary" hidden>
+      <h2>分享摘要</h2>
+      <p id="summaryText"></p>
+      <p class="summary-brand">神隊友數位</p>
+    </section>
   </main>
   <footer class="actions">
     <div class="actions-inner">
@@ -156,9 +162,10 @@ SOFTWARE.
     const LIFF_ID = '2010318197-Y1xKbLOf';
     const GAS_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbxxN1qxktwQZMB1Edmb89EQLaCPwoQADp1IsEh2l9R_JKICCcKaro7PmaylzUSMi9YEUg/exec';
     const READ_TIMEOUT_MS = 30000;
+    const RETRY_DELAY_MS = 1500;
     const SDK_URL = 'https://static.line-scdn.net/liff/edge/2/sdk.js';
     const $ = id => document.getElementById(id);
-    const state = { generation: 0, controller: null, message: null, lineReady: false, dataLoading: false, lineLoading: false, sharing: false, dataError: '', lineError: '', notice: '', success: false };
+    const state = { generation: 0, controller: null, message: null, lineReady: false, lineClient: null, dataLoading: false, lineLoading: false, sharing: false, dataError: '', lineError: '', notice: '', success: false };
     let sdkPromise = null;
     let linePromise = null;
     let callbackSequence = 0;
@@ -188,19 +195,61 @@ SOFTWARE.
       const code = error && error.code ? '[' + String(error.code) + '] ' : '';
       return code + String(error && error.message ? error.message : error || '發生未知錯誤');
     }
-    function timeout(promise, ms, message) {
+    function loadError(code, message, retryable = false) {
+      return Object.assign(new Error(message), { code, retryable });
+    }
+    function timeout(promise, ms, error, signal) {
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(message)), ms);
-        promise.then(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); });
+        let settled = false;
+        let timer;
+        function finish(error, value) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          signal.removeEventListener('abort', abort);
+          if (error) reject(error); else resolve(value);
+        }
+        function abort() { finish(new DOMException('Cancelled', 'AbortError')); }
+        promise.then(value => finish(null, value), error => finish(error));
+        if (signal.aborted) { abort(); return; }
+        signal.addEventListener('abort', abort, { once: true });
+        timer = setTimeout(() => finish(error), ms);
       });
     }
+    function retryDelay(signal) {
+      return new Promise((resolve, reject) => {
+        let timer;
+        function abort() {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', abort);
+          reject(new DOMException('Cancelled', 'AbortError'));
+        }
+        if (signal.aborted) { abort(); return; }
+        signal.addEventListener('abort', abort, { once: true });
+        timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, RETRY_DELAY_MS);
+      });
+    }
+    async function retryLoadOnce(operation, signal, onRetry) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+        try { return await operation(); }
+        catch (error) {
+          if (signal.aborted || !error.retryable || attempt === 1) throw error;
+          onRetry();
+          await retryDelay(signal);
+        }
+      }
+    }
     function loadSdk() {
-      if (window.liff) return Promise.resolve(window.liff);
       if (sdkPromise) return sdkPromise;
+      if (window.liff) { sdkPromise = Promise.resolve(window.liff); return sdkPromise; }
       sdkPromise = new Promise((resolve, reject) => {
         const script = document.createElement('script');
+        let settled = false;
         let timer;
         function finish(error) {
+          if (settled) return;
+          settled = true;
           clearTimeout(timer);
           script.onload = script.onerror = null;
           script.remove();
@@ -208,23 +257,31 @@ SOFTWARE.
         }
         script.async = true;
         script.src = SDK_URL;
-        script.onload = () => finish(window.liff ? null : new Error('LINE 元件載入失敗，請重新連線。'));
-        script.onerror = () => finish(new Error('無法載入 LINE 元件，請檢查網路後再試。'));
-        timer = setTimeout(() => finish(new Error('連接 LINE 逾時，請重新連線。')), READ_TIMEOUT_MS);
+        script.onload = () => finish(window.liff ? null : loadError('SDK_RESPONSE', 'LINE 元件載入失敗，請重新連線。'));
+        script.onerror = () => finish(loadError('SDK_NETWORK', '無法載入 LINE 元件，請檢查網路後再試。', true));
+        timer = setTimeout(() => finish(loadError('SDK_TIMEOUT', '連接 LINE 元件逾時，請檢查網路後再試。', true)), READ_TIMEOUT_MS);
         document.head.appendChild(script);
       }).catch(error => { sdkPromise = null; throw error; });
       return sdkPromise;
     }
-    function prepareLine() {
+    async function prepareLine(signal, onReady, onRetry) {
+      const sdk = await retryLoadOnce(loadSdk, signal, onRetry);
+      if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
       if (!linePromise) {
-        linePromise = loadSdk().then(liff => liff.init({ liffId: LIFF_ID, withLoginOnExternalBrowser: true }))
-          .then(() => {
-            if (!liff.isLoggedIn()) throw new Error('LINE 尚未登入，請關閉後從 LINE 重新開啟。');
-            if (!liff.isApiAvailable('shareTargetPicker')) throw new Error('目前無法使用 LINE 分享，請確認 LINE 版本及分享功能設定。');
-            return window.liff;
-          }).catch(error => { linePromise = null; throw error; });
+        linePromise = Promise.resolve().then(() => sdk.init({ liffId: LIFF_ID, withLoginOnExternalBrowser: true }))
+          .catch(error => { linePromise = null; throw error; });
       }
-      return timeout(linePromise, READ_TIMEOUT_MS, 'LINE 初始化逾時，請重新連線。');
+      const initialized = linePromise.then(() => {
+        if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+        if (!sdk.isLoggedIn()) throw loadError('LINE_LOGIN', 'LINE 尚未登入，請關閉後從 LINE 重新開啟並完成授權。');
+        if (!sdk.isApiAvailable('shareTargetPicker')) throw loadError('LINE_UNAVAILABLE', '目前無法使用 LINE 分享，請確認 LINE 版本及分享功能設定。');
+        // A slow first-time authorization may complete after the UI deadline.
+        // Recover that same initialization; never start a second one in parallel.
+        onReady(sdk);
+        return sdk;
+      });
+      // SDK download and initialization have independent deadlines.
+      return timeout(initialized, READ_TIMEOUT_MS, loadError('LINE_INIT_TIMEOUT', 'LINE 登入初始化較久；完成登入後會自動恢復。若仍無反應，請關閉頁面再開啟。'), signal);
     }
     function loadShareCard(signal) {
       return new Promise((resolve, reject) => {
@@ -238,7 +295,7 @@ SOFTWARE.
           settled = true;
           clearTimeout(timer);
           signal.removeEventListener('abort', abort);
-          script.onerror = null;
+          script.onload = script.onerror = null;
           script.remove();
           // Ignore a late JSONP response after timeout/abort, then release its global.
           if (error) {
@@ -262,9 +319,10 @@ SOFTWARE.
         script.src = url.href;
         script.async = true;
         script.dataset.shareRequest = callbackName;
-        script.onerror = () => finish(new Error('無法連線到 Google 名片服務，請檢查網路後重試。'));
+        script.onerror = () => finish(loadError('CARD_NETWORK', '無法連線到 Google 名片服務，請檢查網路後重試。', true));
+        script.onload = () => finish(loadError('CARD_RESPONSE', 'Google 未回傳名片資料，請確認網頁部署網址與存取權限。'));
         signal.addEventListener('abort', abort, { once: true });
-        timer = setTimeout(() => finish(new Error('讀取名片超過 30 秒，請重新讀取；不會自動傳送任何訊息。')), READ_TIMEOUT_MS);
+        timer = setTimeout(() => finish(loadError('CARD_TIMEOUT', '讀取名片超過 30 秒，請重新讀取；不會自動傳送任何訊息。', true)), READ_TIMEOUT_MS);
         document.head.appendChild(script);
       });
     }
@@ -422,7 +480,7 @@ SOFTWARE.
       const failure = state.dataError || state.lineError;
       $('share').disabled = !state.message || !state.lineReady || loading || state.sharing || !!failure;
       $('reload').disabled = loading || state.sharing;
-      $('retry').disabled = state.sharing;
+      $('retry').disabled = state.sharing || loading;
       $('retry').textContent = state.dataError ? '重新讀取' : '重新連線';
       $('empty').hidden = !!state.message;
       $('spinner').hidden = !loading;
@@ -432,22 +490,25 @@ SOFTWARE.
       $('shareLabel').textContent = state.sharing ? '正在開啟 LINE…' : state.success ? '再次分享' : '選擇好友並分享';
       $('status').classList.toggle('success', state.success);
       $('status').textContent = state.sharing ? '請在 LINE 選擇對象並確認傳送。' : failure ? '目前無法繼續分享，請查看上方提示。' : state.notice || (state.dataLoading ? '正在讀取名片…' : state.lineLoading ? '名片已載入，正在連接 LINE…' : '已載入 ' + (state.message ? bubblesOf(state.message).length : 0) + ' 張名片');
-      $('close').hidden = !state.success || !window.liff || !liff.isInClient();
+      $('close').hidden = !state.success || !state.lineClient || !state.lineClient.isInClient();
       if (!loading) { clearTimeout(slowTimer); slowTimer = null; }
     }
-    async function start() {
+    async function start({ preserveLoaded = false } = {}) {
       if (state.sharing) return;
       const generation = ++state.generation;
       if (state.controller) state.controller.abort();
       state.controller = new AbortController();
-      state.message = null;
-      state.dataLoading = true;
+      if (!preserveLoaded) state.message = null;
+      state.dataLoading = !state.message;
       state.lineLoading = true;
       state.lineReady = false;
+      state.lineClient = null;
       state.dataError = state.lineError = state.notice = '';
       state.success = false;
-      $('track').hidden = $('summary').hidden = $('imageWarning').hidden = true;
+      $('track').hidden = $('summary').hidden = !state.message;
+      $('imageWarning').hidden = true;
       $('navigation').hidden = true;
+      if (state.message) renderPreview(state.message, generation);
       clearTimeout(slowTimer);
       slowTimer = setTimeout(() => {
         if (generation === state.generation && (state.dataLoading || state.lineLoading)) {
@@ -457,7 +518,14 @@ SOFTWARE.
       }, 10000);
       updateUi();
       // Independent public-card loading and LINE initialization run concurrently.
-      const dataTask = loadShareCard(state.controller.signal).then(message => {
+      const signal = state.controller.signal;
+      const reportRetry = message => {
+        if (generation !== state.generation || signal.aborted) return;
+        clearTimeout(slowTimer);
+        state.notice = message;
+        updateUi();
+      };
+      const dataTask = (state.message ? Promise.resolve(state.message) : retryLoadOnce(() => loadShareCard(signal), signal, () => reportRetry('名片連線暫時不穩，正在自動重新讀取一次…'))).then(message => {
         if (generation !== state.generation) return;
         state.message = message;
         renderPreview(message, generation);
@@ -466,10 +534,16 @@ SOFTWARE.
       }).finally(() => {
         if (generation === state.generation) { state.dataLoading = false; state.notice = ''; updateUi(); }
       });
-      const lineTask = prepareLine().then(() => {
-        if (generation === state.generation) state.lineReady = true;
-      }).catch(error => {
-        if (generation === state.generation) state.lineError = errorText(error);
+      const lineTask = prepareLine(signal, client => {
+        if (generation !== state.generation || signal.aborted) return;
+        state.lineReady = true;
+        state.lineClient = client;
+        state.lineLoading = false;
+        state.lineError = '';
+        if (!state.dataLoading) state.notice = '';
+        updateUi();
+      }, () => reportRetry('LINE 元件連線暫時不穩，正在自動重新連線一次…')).catch(error => {
+        if (generation === state.generation && error.name !== 'AbortError') state.lineError = errorText(error);
       }).finally(() => {
         if (generation === state.generation) { state.lineLoading = false; updateUi(); }
       });
@@ -482,12 +556,14 @@ SOFTWARE.
       state.notice = '';
       updateUi();
       try {
-        if (!liff.isLoggedIn() || !liff.isApiAvailable('shareTargetPicker')) {
+        // Keep the initialized instance even if a timed-out SDK script arrives late.
+        const client = state.lineClient;
+        if (!client || !client.isLoggedIn() || !client.isApiAvailable('shareTargetPicker')) {
           state.lineReady = false;
           linePromise = null;
           throw new Error('LINE 登入或分享狀態已失效，請重新連線。');
         }
-        const result = await liff.shareTargetPicker([state.message]);
+        const result = await client.shareTargetPicker([state.message]);
         if (result && result.status === 'success') {
           state.success = true;
           state.notice = '分享完成，謝謝您的推薦。';
@@ -501,8 +577,8 @@ SOFTWARE.
         updateUi();
       }
     }
-    $('reload').addEventListener('click', start);
-    $('retry').addEventListener('click', start);
+    $('reload').addEventListener('click', () => start());
+    $('retry').addEventListener('click', () => start({ preserveLoaded: true }));
     $('share').addEventListener('click', share);
     $('previous').addEventListener('click', () => moveCard(-1));
     $('next').addEventListener('click', () => moveCard(1));
@@ -511,7 +587,7 @@ SOFTWARE.
       if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); moveCard(event.key === 'ArrowLeft' ? -1 : 1); }
     });
     window.addEventListener('resize', updateNavigation);
-    $('close').addEventListener('click', () => { if (window.liff && liff.isInClient()) liff.closeWindow(); });
+    $('close').addEventListener('click', () => { if (state.lineClient && state.lineClient.isInClient()) state.lineClient.closeWindow(); });
     window.addEventListener('pagehide', () => {
       state.generation++;
       if (state.controller) state.controller.abort();
