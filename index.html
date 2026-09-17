@@ -162,6 +162,8 @@ SOFTWARE.
     const LIFF_ID = '2010318197-Y1xKbLOf';
     const GAS_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbxxN1qxktwQZMB1Edmb89EQLaCPwoQADp1IsEh2l9R_JKICCcKaro7PmaylzUSMi9YEUg/exec';
     const READ_TIMEOUT_MS = 30000;
+    const CARD_RECOVERY_DELAY_MS = 15000;
+    const CARD_TOTAL_TIMEOUT_MS = 60000;
     const RETRY_DELAY_MS = 1500;
     const SDK_URL = 'https://static.line-scdn.net/liff/edge/2/sdk.js';
     const $ = id => document.getElementById(id);
@@ -283,17 +285,58 @@ SOFTWARE.
       // SDK download and initialization have independent deadlines.
       return timeout(initialized, READ_TIMEOUT_MS, loadError('LINE_INIT_TIMEOUT', 'LINE 登入初始化較久；完成登入後會自動恢復。若仍無反應，請關閉頁面再開啟。'), signal);
     }
-    function loadShareCard(signal) {
+    function loadShareCard(signal, onRecovery) {
+      return new Promise((resolve, reject) => {
+        const controller = new AbortController();
+        let settled = false;
+        let attempts = 0;
+        let pending = 0;
+        let invalidResponse = null;
+        let deadlineTimer;
+        let recoveryTimer;
+        function finish(error, value) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(deadlineTimer);
+          clearTimeout(recoveryTimer);
+          signal.removeEventListener('abort', abort);
+          controller.abort();
+          if (error) reject(error); else resolve(value);
+        }
+        function abort() { finish(new DOMException('Cancelled', 'AbortError')); }
+        function read() {
+          if (settled || attempts >= 2) return;
+          clearTimeout(recoveryTimer);
+          attempts++;
+          pending++;
+          if (attempts === 2) onRecovery();
+          requestShareCard(controller.signal).then(message => finish(null, message), error => {
+            pending--;
+            if (settled) return;
+            if (!error.retryable) invalidResponse = error;
+            if (pending) return;
+            if (invalidResponse || attempts === 2) { finish(invalidResponse || error); return; }
+            onRecovery();
+            recoveryTimer = setTimeout(read, RETRY_DELAY_MS);
+          });
+        }
+        if (signal.aborted) { abort(); return; }
+        signal.addEventListener('abort', abort, { once: true });
+        deadlineTimer = setTimeout(() => finish(invalidResponse || loadError('CARD_TIMEOUT', '名片讀取超過 60 秒，已嘗試重新連線。請檢查網路後再試；不會自動傳送任何訊息。')), CARD_TOTAL_TIMEOUT_MS);
+        read();
+        // Keep a slow first response alive; the recovery must not discard fresh edits.
+        recoveryTimer = setTimeout(read, CARD_RECOVERY_DELAY_MS);
+      });
+    }
+    function requestShareCard(signal) {
       return new Promise((resolve, reject) => {
         if (signal.aborted) { reject(new DOMException('Cancelled', 'AbortError')); return; }
         const callbackName = 'receiveFlex_' + Date.now() + '_' + (++callbackSequence);
         const script = document.createElement('script');
         let settled = false;
-        let timer;
         function finish(error, value) {
           if (settled) return;
           settled = true;
-          clearTimeout(timer);
           signal.removeEventListener('abort', abort);
           script.onload = script.onerror = null;
           script.remove();
@@ -322,7 +365,6 @@ SOFTWARE.
         script.onerror = () => finish(loadError('CARD_NETWORK', '無法連線到 Google 名片服務，請檢查網路後重試。', true));
         script.onload = () => finish(loadError('CARD_RESPONSE', 'Google 未回傳名片資料，請確認網頁部署網址與存取權限。'));
         signal.addEventListener('abort', abort, { once: true });
-        timer = setTimeout(() => finish(loadError('CARD_TIMEOUT', '讀取名片超過 30 秒，請重新讀取；不會自動傳送任何訊息。', true)), READ_TIMEOUT_MS);
         document.head.appendChild(script);
       });
     }
@@ -525,7 +567,7 @@ SOFTWARE.
         state.notice = message;
         updateUi();
       };
-      const dataTask = (state.message ? Promise.resolve(state.message) : retryLoadOnce(() => loadShareCard(signal), signal, () => reportRetry('名片連線暫時不穩，正在自動重新讀取一次…'))).then(message => {
+      const dataTask = (state.message ? Promise.resolve(state.message) : loadShareCard(signal, () => reportRetry('名片回應較慢或連線不穩，正在自動補讀一次，請稍候…'))).then(message => {
         if (generation !== state.generation) return;
         state.message = message;
         renderPreview(message, generation);
