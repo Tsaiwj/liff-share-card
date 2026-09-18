@@ -41,7 +41,7 @@ SOFTWARE.
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
-  <meta name="share-page-version" content="2026-09-18-sequential-init">
+  <meta name="share-page-version" content="2026-09-18-parallel-read-v1">
   <title>轉分享LINE名片</title>
   <link rel="preconnect" href="https://static.line-scdn.net" crossorigin>
   <link rel="preconnect" href="https://script.google.com">
@@ -99,6 +99,7 @@ SOFTWARE.
     .status { color: var(--muted); font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
     .status.success { color: var(--green); }
     .action-buttons { display: flex; gap: 10px; flex: none; }
+    .action-buttons .secondary { flex: none; white-space: nowrap; }
     .primary { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 48px; min-width: 228px; padding: 12px 20px; border: 0; border-radius: 6px; font-weight: 650; color: white; background: var(--green); }
     .primary:hover:not(:disabled) { background: #0d603e; }
     .primary:disabled { background: #d7dfda; color: #78857b; }
@@ -166,7 +167,6 @@ SOFTWARE.
     const LIFF_ENTRY_URL = 'https://liff.line.me/' + encodeURIComponent(LIFF_ID);
     const GAS_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbxxN1qxktwQZMB1Edmb89EQLaCPwoQADp1IsEh2l9R_JKICCcKaro7PmaylzUSMi9YEUg/exec';
     const READ_TIMEOUT_MS = 30000;
-    const CARD_RECOVERY_DELAY_MS = 15000;
     const CARD_TOTAL_TIMEOUT_MS = 60000;
     const RETRY_DELAY_MS = 1500;
     const $ = id => document.getElementById(id);
@@ -178,6 +178,16 @@ SOFTWARE.
     let callbackSequence = 0;
     let slowTimer = null;
     let restartTimer = null;
+    let loadDiagnostics = null;
+
+    function getShareLoadDiagnostics() {
+      if (!loadDiagnostics) return null;
+      return JSON.parse(JSON.stringify({ ...loadDiagnostics,
+        elapsedMs: Math.round(performance.now() - loadDiagnostics.startedAt),
+        lineReady: state.lineReady, cardReady: !!state.message,
+        lineErrorCode: state.lineErrorCode, cardFailed: !!state.dataError
+      }));
+    }
 
     // Lucide icons (ISC license), bundled to avoid another network dependency.
     const icons = {
@@ -247,6 +257,7 @@ SOFTWARE.
     }
     function loadSdk() {
       if (sdkPromise) return sdkPromise;
+      if (window.liff && typeof window.liff.init === 'function') return (sdkPromise = Promise.resolve(window.liff));
       sdkPromise = new Promise((resolve, reject) => {
         const script = $('line-sdk');
         let settled = false;
@@ -254,6 +265,7 @@ SOFTWARE.
           if (settled) return;
           settled = true;
           document.removeEventListener('DOMContentLoaded', ready);
+          script.removeEventListener('load', ready);
           script.removeEventListener('error', failed);
           if (error) reject(error); else resolve(window.liff);
         }
@@ -264,6 +276,7 @@ SOFTWARE.
         }
         // One deferred SDK per document. Never start a competing download on timeout.
         script.addEventListener('error', failed, { once: true });
+        script.addEventListener('load', ready, { once: true });
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready, { once: true });
         else ready();
       });
@@ -300,47 +313,46 @@ SOFTWARE.
       await timeout(linePromise, READ_TIMEOUT_MS, loadError('LINE_INIT_TIMEOUT', 'LINE 登入連線逾時。請按「重新開啟 LINE」重建連線；若仍無反應，請關閉此頁後，從名片再次點選轉分享。尚未傳送任何名片。'), signal);
       return initialized;
     }
-    function loadShareCard(signal, onRecovery) {
-      return new Promise((resolve, reject) => {
-        const controller = new AbortController();
-        let settled = false;
-        let attempts = 0;
-        let pending = 0;
-        let invalidResponse = null;
-        let deadlineTimer;
-        let recoveryTimer;
-        function finish(error, value) {
-          if (settled) return;
-          settled = true;
-          clearTimeout(deadlineTimer);
-          clearTimeout(recoveryTimer);
-          signal.removeEventListener('abort', abort);
-          controller.abort();
-          if (error) reject(error); else resolve(value);
-        }
-        function abort() { finish(new DOMException('Cancelled', 'AbortError')); }
-        function read() {
-          if (settled || attempts >= 2) return;
-          clearTimeout(recoveryTimer);
-          attempts++;
-          pending++;
-          if (attempts === 2) onRecovery();
-          requestShareCard(controller.signal).then(message => finish(null, message), error => {
-            pending--;
-            if (settled) return;
-            if (!error.retryable) invalidResponse = error;
-            if (pending) return;
-            if (invalidResponse || attempts === 2) { finish(invalidResponse || error); return; }
+    async function loadShareCard(signal, onRecovery, onAttempt) {
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+      signal.addEventListener('abort', abort, { once: true });
+      async function read() {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (controller.signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+          onAttempt();
+          try { return await requestShareCard(controller.signal); }
+          catch (error) {
+            if (controller.signal.aborted || !error.retryable || attempt === 1) throw error;
             onRecovery();
-            recoveryTimer = setTimeout(read, RETRY_DELAY_MS);
-          });
+            await waitForCardRetry(controller.signal);
+          }
+        }
+      }
+      try {
+        // A slow request stays alive; only a definite network failure gets one retry.
+        return await timeout(read(), CARD_TOTAL_TIMEOUT_MS,
+          loadError('CARD_TIMEOUT', '名片讀取逾時，請稍後重新讀取；不會自動傳送任何訊息。'), signal);
+      } finally {
+        signal.removeEventListener('abort', abort);
+        controller.abort();
+      }
+    }
+    function waitForCardRetry(signal) {
+      return new Promise((resolve, reject) => {
+        let timer;
+        function abort() {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', abort);
+          reject(new DOMException('Cancelled', 'AbortError'));
         }
         if (signal.aborted) { abort(); return; }
         signal.addEventListener('abort', abort, { once: true });
-        deadlineTimer = setTimeout(() => finish(invalidResponse || loadError('CARD_TIMEOUT', '名片讀取超過 60 秒，已嘗試重新連線。請檢查網路後再試；不會自動傳送任何訊息。')), CARD_TOTAL_TIMEOUT_MS);
-        read();
-        // Keep a slow first response alive; the recovery must not discard fresh edits.
-        recoveryTimer = setTimeout(read, CARD_RECOVERY_DELAY_MS);
+        timer = setTimeout(() => {
+          signal.removeEventListener('abort', abort);
+          resolve();
+        }, RETRY_DELAY_MS);
       });
     }
     function requestShareCard(signal) {
@@ -376,6 +388,7 @@ SOFTWARE.
         url.searchParams.set('v', String(Date.now()));
         script.src = url.href;
         script.async = true;
+        script.referrerPolicy = 'no-referrer';
         script.dataset.shareRequest = callbackName;
         script.onerror = () => finish(loadError('CARD_NETWORK', '無法連線到 Google 名片服務，請檢查網路後重試。', true));
         script.onload = () => finish(loadError('CARD_RESPONSE', 'Google 未回傳名片資料，請確認網頁部署網址與存取權限。'));
@@ -573,9 +586,10 @@ SOFTWARE.
     }
     function updateUi() {
       const loading = state.dataLoading || state.lineLoading;
-      const loadingText = state.lineLoading
-        ? state.lineStage === 'sdk' ? '正在載入 LINE 元件…' : state.lineStage === 'login' ? '正在前往 LINE 登入…' : '正在連接 LINE…'
-        : '正在讀取名片…';
+      const loadingStages = [];
+      if (state.lineLoading) loadingStages.push(state.lineStage === 'sdk' ? '正在載入 LINE 元件' : state.lineStage === 'login' ? '正在前往 LINE 登入' : '正在連接 LINE');
+      if (state.dataLoading) loadingStages.push('正在讀取名片');
+      const loadingText = loadingStages.join('，') + '…';
       const restart = needsLineRestart();
       const failure = [state.lineError, state.dataError].filter(Boolean).join('\n');
       $('share').disabled = !state.message || !state.lineReady || loading || state.sharing || state.restarting || !!failure;
@@ -594,6 +608,9 @@ SOFTWARE.
       $('status').classList.toggle('success', state.success);
       $('status').textContent = state.restarting ? '正在重新開啟 LINE…' : state.sharing ? '請在 LINE 選擇對象並確認傳送。' : failure ? '目前無法繼續分享，請查看上方提示。' : state.notice || (loading ? loadingText : '已載入 ' + (state.message ? bubblesOf(state.message).length : 0) + ' 張名片');
       $('close').hidden = !state.success || !state.lineClient || !state.lineClient.isInClient();
+      if (loadDiagnostics && loadDiagnostics.readyMs === null && state.lineReady && state.message && !loading && !failure) {
+        loadDiagnostics.readyMs = Math.round(performance.now() - loadDiagnostics.startedAt);
+      }
       if (!loading) { clearTimeout(slowTimer); slowTimer = null; }
     }
     async function start({ preserveLoaded = false } = {}) {
@@ -602,18 +619,27 @@ SOFTWARE.
       const generation = state.generation;
       state.controller = new AbortController();
       if (!preserveLoaded) state.message = null;
+      state.dataLoading = !state.message;
       state.lineLoading = true;
       state.lineStage = 'sdk';
       state.lineClient = null;
       state.dataError = state.lineError = state.lineErrorCode = state.notice = '';
       state.success = false;
+      const startedAt = performance.now();
+      const diagnostics = loadDiagnostics = {
+        version: '2026-09-18-parallel-read-v1', startedAt, sdkMs: null, lineMs: null,
+        cardMs: state.message ? 0 : null, cardAttempts: 0,
+        cardSource: state.message ? 'retained' : 'network', readyMs: null
+      };
       $('track').hidden = $('summary').hidden = !state.message;
       $('imageWarning').hidden = true;
       $('navigation').hidden = true;
       if (state.message) renderPreview(state.message, generation);
       slowTimer = setTimeout(() => {
         if (generation === state.generation && (state.dataLoading || state.lineLoading)) {
-          state.notice = '連線較慢，仍在讀取中，請稍候…';
+          state.notice = state.dataLoading && !state.lineLoading
+            ? '名片服務回應較慢，仍在讀取中…'
+            : state.lineLoading && !state.dataLoading ? '名片已載入，仍在等待 LINE 連線…' : '連線較慢，仍在讀取中，請稍候…';
           updateUi();
         }
       }, 10000);
@@ -625,7 +651,6 @@ SOFTWARE.
         state.notice = message;
         updateUi();
       };
-      let dataTask = null;
       const lineFailed = error => {
         if (generation !== state.generation || signal.aborted || error.name === 'AbortError') return;
         state.lineLoading = false;
@@ -634,26 +659,17 @@ SOFTWARE.
         updateUi();
       };
       const lineTask = prepareLine(signal, client => {
-        if (generation !== state.generation || signal.aborted || dataTask) return;
+        if (generation !== state.generation || signal.aborted) return;
         state.lineReady = true;
         state.lineClient = client;
         state.lineLoading = false;
         state.lineError = state.lineErrorCode = '';
         state.notice = '';
-        state.dataLoading = !state.message;
+        diagnostics.lineMs = Math.round(performance.now() - startedAt - (diagnostics.sdkMs || 0));
         updateUi();
-        // Start JSONP/images only after LINE is ready, like the club share page.
-        dataTask = (state.message ? Promise.resolve(state.message) : loadShareCard(signal, () => reportRetry('名片回應較慢或連線不穩，正在自動補讀一次，請稍候…'))).then(message => {
-          if (generation !== state.generation || signal.aborted) return;
-          state.message = message;
-          renderPreview(message, generation);
-        }).catch(error => {
-          if (generation === state.generation && error.name !== 'AbortError') state.dataError = errorText(error);
-        }).finally(() => {
-          if (generation === state.generation) { state.dataLoading = false; state.notice = ''; updateUi(); }
-        });
       }, stage => {
         if (generation !== state.generation || signal.aborted) return;
+        if (stage === 'init') diagnostics.sdkMs = Math.round(performance.now() - startedAt);
         state.lineStage = stage;
         state.lineLoading = true;
         state.lineError = state.lineErrorCode = state.notice = '';
@@ -661,8 +677,27 @@ SOFTWARE.
       }, lineFailed).catch(lineFailed).finally(() => {
         if (generation === state.generation) { state.lineLoading = false; updateUi(); }
       });
-      await lineTask;
-      if (dataTask) await dataTask;
+
+      // getShareCard is a public business-card read with no LINE token dependency.
+      // Keep LINE initialization single-flight; sharing still requires both fresh data and LINE readiness.
+      const cardStartedAt = performance.now();
+      const dataTask = (state.message ? Promise.resolve(state.message) : loadShareCard(signal,
+        () => reportRetry('名片連線中斷，正在重新讀取一次…'),
+        () => { if (generation === state.generation) diagnostics.cardAttempts++; }
+      )).then(message => {
+        if (generation !== state.generation || signal.aborted) return;
+        state.message = message;
+        renderPreview(message, generation);
+      }).catch(error => {
+        if (generation === state.generation && error.name !== 'AbortError') state.dataError = errorText(error);
+      }).finally(() => {
+        if (generation !== state.generation) return;
+        diagnostics.cardMs = Math.round(performance.now() - cardStartedAt);
+        state.dataLoading = false;
+        state.notice = '';
+        updateUi();
+      });
+      await Promise.allSettled([lineTask, dataTask]);
     }
     async function share() {
       if ($('share').disabled || state.sharing || !state.message) return;
