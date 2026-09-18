@@ -598,14 +598,12 @@ SOFTWARE.
     }
     async function start({ preserveLoaded = false } = {}) {
       if (state.sharing || state.restarting) return;
-      const generation = ++state.generation;
-      if (state.controller) state.controller.abort();
+      stopPendingLoads();
+      const generation = state.generation;
       state.controller = new AbortController();
       if (!preserveLoaded) state.message = null;
-      state.dataLoading = false;
       state.lineLoading = true;
       state.lineStage = 'sdk';
-      state.lineReady = false;
       state.lineClient = null;
       state.dataError = state.lineError = state.lineErrorCode = state.notice = '';
       state.success = false;
@@ -613,7 +611,6 @@ SOFTWARE.
       $('imageWarning').hidden = true;
       $('navigation').hidden = true;
       if (state.message) renderPreview(state.message, generation);
-      clearTimeout(slowTimer);
       slowTimer = setTimeout(() => {
         if (generation === state.generation && (state.dataLoading || state.lineLoading)) {
           state.notice = '連線較慢，仍在讀取中，請稍候…';
@@ -641,7 +638,6 @@ SOFTWARE.
         state.lineReady = true;
         state.lineClient = client;
         state.lineLoading = false;
-        state.lineStage = 'ready';
         state.lineError = state.lineErrorCode = '';
         state.notice = '';
         state.dataLoading = !state.message;
@@ -675,7 +671,7 @@ SOFTWARE.
       state.notice = '';
       updateUi();
       try {
-        // Keep the initialized instance even if a timed-out SDK script arrives late.
+        // Share through the same SDK instance that completed initialization.
         const client = state.lineClient;
         if (!client || !client.isLoggedIn() || !client.isApiAvailable('shareTargetPicker')) {
           state.lineReady = false;
@@ -708,12 +704,7 @@ SOFTWARE.
     });
     window.addEventListener('resize', updateNavigation);
     $('close').addEventListener('click', () => { if (state.lineClient && state.lineClient.isInClient()) state.lineClient.closeWindow(); });
-    window.addEventListener('pagehide', () => {
-      state.generation++;
-      if (state.controller) state.controller.abort();
-      clearTimeout(slowTimer);
-      clearTimeout(restartTimer);
-    });
+    window.addEventListener('pagehide', stopPendingLoads);
     window.addEventListener('pageshow', event => {
       if (!event.persisted) return;
       if (needsLineRestart()) {
