@@ -41,7 +41,7 @@ SOFTWARE.
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
-  <meta name="share-page-version" content="2026-09-18-cached-preview">
+  <meta name="share-page-version" content="2026-09-18-post-json-24h">
   <title>轉分享LINE名片</title>
   <link rel="preconnect" href="https://static.line-scdn.net" crossorigin>
   <link rel="preconnect" href="https://script.google.com">
@@ -171,7 +171,7 @@ SOFTWARE.
     const CARD_TOTAL_TIMEOUT_MS = 60000;
     const CARD_RETRY_DELAYS_MS = [2000, 5000];
     const CARD_MAX_ATTEMPTS = CARD_RETRY_DELAYS_MS.length + 1;
-    const CARD_CACHE_MAX_AGE_MS = 10 * 60 * 1000;
+    const CARD_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     const CARD_CACHE_MAX_LENGTH = 200000;
     const CARD_CACHE_KEY = 'insurance-public-card-v1:' + JSON.stringify([LIFF_ID, GAS_WEBAPP_URL]);
     const $ = id => document.getElementById(id);
@@ -355,9 +355,9 @@ SOFTWARE.
         }
         function abort() { finish(new DOMException('Cancelled', 'AbortError')); }
         function deadline() { finish(invalidResponse || loadError('CARD_TIMEOUT', '名片讀取超過 60 秒，請稍後重新讀取。')); }
-        function retryAfterFailure() {
+        function retryAfterFailure(error) {
           clearTimeout(recoveryTimer);
-          const delay = CARD_RETRY_DELAYS_MS[attempts - 1] + Math.floor(Math.random() * 500);
+          const delay = error.code === 'CARD_LEGACY' ? 0 : CARD_RETRY_DELAYS_MS[attempts - 1] + Math.floor(Math.random() * 500);
           if (performance.now() - startedAt + delay >= CARD_TOTAL_TIMEOUT_MS) return;
           onRecovery(attempts + 1, delay);
           recoveryTimer = setTimeout(read, delay);
@@ -369,14 +369,15 @@ SOFTWARE.
           attempts++;
           pending++;
           if (attempts > 1) onRecovery(attempts, 0);
-          requestShareCard(controller.signal).then(message => finish(null, message), error => {
+          // Try POST first; bounded recovery uses the existing JSONP endpoint.
+          requestShareCard(controller.signal, attempts > 1).then(message => finish(null, message), error => {
             pending--;
             if (settled) return;
             if (!error.retryable) invalidResponse = error;
             // A pending response still has a chance to succeed; do not pile on requests.
             if (pending) return;
             if (invalidResponse || attempts === CARD_MAX_ATTEMPTS) { finish(invalidResponse || error); return; }
-            retryAfterFailure();
+            retryAfterFailure(error);
           });
         }
         if (signal.aborted) { abort(); return; }
@@ -387,7 +388,43 @@ SOFTWARE.
         recoveryTimer = setTimeout(read, CARD_RECOVERY_DELAY_MS);
       });
     }
-    function requestShareCard(signal) {
+    function parseCardResponse(data) {
+      if (data && data.ok === false && data.code === 'CARD_SERVER') {
+        throw loadError('CARD_SERVER', '名片服務暫時無法讀取，請稍後重試。', true);
+      }
+      try {
+        if (!data || data.ok !== true) throw new Error('Google 回傳資料失敗，請確認名片資料與部署設定。');
+        return validateMessage(data.flexMessage);
+      } catch (error) { throw loadError('CARD_DATA', errorText(error)); }
+    }
+    async function requestShareCard(signal, legacy = false) {
+      if (legacy) return requestShareCardJsonp(signal);
+      try {
+        const url = new URL(GAS_WEBAPP_URL);
+        url.searchParams.set('action', 'getShareCard');
+        const response = await fetch(url.href, {
+          method: 'POST', mode: 'cors', credentials: 'omit', redirect: 'follow', cache: 'no-store',
+          headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+          body: JSON.stringify({ requestType: 'referral-share', action: 'getShareCard' }), signal
+        });
+        if (response.status === 401 || response.status === 403) {
+          throw loadError('CARD_RESPONSE', 'Google 拒絕名片讀取，請確認網頁部署的存取權限。');
+        }
+        if (!response.ok) throw loadError('CARD_NETWORK', 'Google 名片資料暫時無法取得，請稍後重新讀取。', true);
+        const text = await response.text();
+        // Older Libraries acknowledge unrecognized POST requests with plain OK.
+        if (text.trim() === 'OK') throw loadError('CARD_LEGACY', '正在使用相容方式讀取名片。', true);
+        let data;
+        try { data = JSON.parse(text); }
+        catch { throw loadError('CARD_RESPONSE', 'Google 未回傳有效 JSON，請確認 Library 版本與網頁部署。'); }
+        return parseCardResponse(data);
+      } catch (error) {
+        if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+        if (error && error.code) throw error;
+        throw loadError('CARD_NETWORK', 'Google 名片資料暫時無法取得，請稍後重新讀取。', true);
+      }
+    }
+    function requestShareCardJsonp(signal) {
       return new Promise((resolve, reject) => {
         if (signal.aborted) { reject(new DOMException('Cancelled', 'AbortError')); return; }
         const callbackName = 'receiveFlex_' + Date.now() + '_' + (++callbackSequence);
@@ -409,10 +446,8 @@ SOFTWARE.
         function abort() { finish(new DOMException('Cancelled', 'AbortError')); }
         window[callbackName] = data => {
           try {
-            if (!data || data.ok !== true) throw new Error('Google 回傳資料失敗，請重新讀取。');
-            const message = validateMessage(data.flexMessage);
-            finish(null, message);
-          } catch (error) { finish(loadError('CARD_DATA', errorText(error))); }
+            finish(null, parseCardResponse(data));
+          } catch (error) { finish(error); }
         };
         const url = new URL(GAS_WEBAPP_URL);
         url.searchParams.set('action', 'getShareCard');
@@ -591,7 +626,7 @@ SOFTWARE.
       if (state.sharing) { state.pendingCard = result; return; }
       if (result.message) {
         applyCard(result.message, result.savedAt);
-      } else if (state.fromCache && cacheIsCurrent(state.cachedAt) && ['CARD_NETWORK', 'CARD_TIMEOUT'].includes(result.error.code)) {
+      } else if (state.fromCache && cacheIsCurrent(state.cachedAt) && ['CARD_NETWORK', 'CARD_TIMEOUT', 'CARD_SERVER'].includes(result.error.code)) {
         state.cacheWarning = true;
       } else {
         clearCardCache();
