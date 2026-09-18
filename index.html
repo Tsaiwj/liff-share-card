@@ -41,7 +41,7 @@ SOFTWARE.
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
-  <meta name="share-page-version" content="2026-09-18-sequential-init">
+  <meta name="share-page-version" content="2026-09-18-bounded-recovery">
   <title>轉分享LINE名片</title>
   <link rel="preconnect" href="https://static.line-scdn.net" crossorigin>
   <link rel="preconnect" href="https://script.google.com">
@@ -54,7 +54,7 @@ SOFTWARE.
     body { margin: 0; color: var(--ink); background: var(--paper); font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "Noto Sans TC", sans-serif; padding-bottom: calc(112px + env(safe-area-inset-bottom)); }
     button { font: inherit; cursor: pointer; touch-action: manipulation; }
     button:disabled { cursor: default; }
-    button:focus-visible, [tabindex]:focus-visible { outline: 3px solid #76b8ec; outline-offset: 3px; }
+    button:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline: 3px solid #76b8ec; outline-offset: 3px; }
     .topbar { background: white; border-bottom: 1px solid var(--line); }
     .topbar-inner, main, .actions-inner { max-width: 1040px; margin: auto; padding-inline: 24px; }
     .topbar-inner { min-height: 76px; display: flex; align-items: center; gap: 12px; }
@@ -91,6 +91,9 @@ SOFTWARE.
     @keyframes turn { to { transform: rotate(360deg); } }
     .error { margin: 20px 0; padding: 12px 16px; border-left: 3px solid #bc3d34; background: #fff0ee; color: #8e332c; overflow-wrap: anywhere; }
     .error p { margin: 0 0 10px; white-space: pre-wrap; }
+    .diagnostics { margin: 16px 0; color: var(--muted); font-size: 13px; }
+    .diagnostics summary { cursor: pointer; }
+    .diagnostics pre { margin: 8px 0; font: 12px/1.6 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
     .recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; }
     .secondary { border: 1px solid #c6d2cb; color: #3f5046; background: white; border-radius: 6px; padding: 8px 14px; font-weight: 600; }
     .secondary:disabled { opacity: .5; }
@@ -141,6 +144,7 @@ SOFTWARE.
     </div>
     <p class="notice"><span data-icon="info"></span><span>網頁預覽可能因網速、裝置、字型或 LINE 版本而有載入或排版差異，實際呈現以 LINE 收到的卡片為準。若無法預覽，請關閉頁面重新轉分享一次。</span></p>
     <div id="error" class="error" role="alert" hidden><p id="errorText"></p><div class="recovery-actions"><button id="retry" class="secondary" type="button">重新讀取</button><button id="closeRecovery" class="secondary" type="button" hidden>關閉此頁</button></div></div>
+    <details id="diagnostics" class="diagnostics" hidden><summary>連線診斷</summary><pre id="diagnosticText"></pre></details>
     <div id="empty" class="empty-state" aria-live="polite"><span class="spinner" id="spinner" aria-hidden="true"></span><span id="emptyText">正在載入 LINE 元件…</span></div>
     <div id="track" class="track" role="region" aria-label="即將分享的名片" tabindex="0" hidden></div>
     <p id="imageWarning" class="image-warning" hidden>部分圖片無法預覽，請確認圖片網址與公開權限後再分享。</p>
@@ -168,7 +172,8 @@ SOFTWARE.
     const READ_TIMEOUT_MS = 30000;
     const CARD_RECOVERY_DELAY_MS = 15000;
     const CARD_TOTAL_TIMEOUT_MS = 60000;
-    const RETRY_DELAY_MS = 1500;
+    const CARD_RETRY_DELAYS_MS = [2000, 5000];
+    const CARD_MAX_ATTEMPTS = CARD_RETRY_DELAYS_MS.length + 1;
     const $ = id => document.getElementById(id);
     const state = { generation: 0, controller: null, message: null, lineReady: false, lineClient: null, lineStage: 'sdk', dataLoading: false, lineLoading: false, sharing: false, restarting: false, dataError: '', lineError: '', lineErrorCode: '', notice: '', success: false };
     let sdkPromise = null;
@@ -178,6 +183,7 @@ SOFTWARE.
     let callbackSequence = 0;
     let slowTimer = null;
     let restartTimer = null;
+    const diagnosticHistory = [];
 
     // Lucide icons (ISC license), bundled to avoid another network dependency.
     const icons = {
@@ -205,6 +211,36 @@ SOFTWARE.
     }
     function loadError(code, message, retryable = false) {
       return Object.assign(new Error(message), { code, retryable });
+    }
+    function beginDiagnostics() {
+      const run = { at: new Date().toISOString(), started: performance.now(), attempts: 0, events: [] };
+      diagnosticHistory.push(run);
+      if (diagnosticHistory.length > 3) diagnosticHistory.shift();
+      recordDiagnostic(run, 'LINE', 'SDK_WAIT');
+      return run;
+    }
+    function diagnosticCode(error) {
+      if (!error) return 'OK';
+      if (error.name === 'AbortError') return 'CANCELLED';
+      // Only our own codes are retained, never SDK messages, URLs or card data.
+      return ['SDK_NETWORK', 'SDK_TIMEOUT', 'LINE_INIT_FAILED', 'LINE_INIT_TIMEOUT', 'LINE_LOGIN', 'LINE_LOGIN_TIMEOUT', 'LINE_UNAVAILABLE', 'CARD_NETWORK', 'CARD_RESPONSE', 'CARD_DATA', 'CARD_TIMEOUT'].includes(error.code) ? error.code : 'ERROR';
+    }
+    function recordDiagnostic(run, phase, code, attempt = 0, durationMs = 0) {
+      if (!run) return;
+      const previous = run.events[run.events.length - 1];
+      if (previous && previous.phase === phase && previous.code === code && previous.attempt === attempt) return;
+      run.events.push({ phase, code, attempt, durationMs: Math.round(durationMs), elapsedMs: Math.round(performance.now() - run.started) });
+      if (run.events.length > 24) run.events.shift();
+    }
+    function diagnosticReport() {
+      const version = document.querySelector('meta[name="share-page-version"]').content;
+      const lines = ['版本：' + version, 'HTTP 狀態：JSONP 無法取得', '紀錄僅留在本頁，關閉後不保留。'];
+      diagnosticHistory.forEach((run, index) => {
+        lines.push('', '紀錄 ' + (index + 1) + '｜開始時間 (UTC)：' + run.at, '名片請求：' + run.attempts + ' 次');
+        run.events.forEach(event => lines.push('+' + (event.elapsedMs / 1000).toFixed(2) + 's ' + event.phase + ' ' + event.code +
+          (event.attempt ? ' #' + event.attempt : '') + (event.durationMs ? ' (' + (event.durationMs / 1000).toFixed(2) + 's)' : '')));
+      });
+      return lines.join('\n');
     }
     function timeout(promise, ms, error, signal) {
       return new Promise((resolve, reject) => {
@@ -300,9 +336,10 @@ SOFTWARE.
       await timeout(linePromise, READ_TIMEOUT_MS, loadError('LINE_INIT_TIMEOUT', 'LINE 登入連線逾時。請按「重新開啟 LINE」重建連線；若仍無反應，請關閉此頁後，從名片再次點選轉分享。尚未傳送任何名片。'), signal);
       return initialized;
     }
-    function loadShareCard(signal, onRecovery) {
+    function loadShareCard(signal, onRecovery, diagnostic) {
       return new Promise((resolve, reject) => {
         const controller = new AbortController();
+        const startedAt = performance.now();
         let settled = false;
         let attempts = 0;
         let pending = 0;
@@ -316,36 +353,50 @@ SOFTWARE.
           clearTimeout(recoveryTimer);
           signal.removeEventListener('abort', abort);
           controller.abort();
+          recordDiagnostic(diagnostic, '名片讀取', diagnosticCode(error), 0, performance.now() - startedAt);
           if (error) reject(error); else resolve(value);
         }
         function abort() { finish(new DOMException('Cancelled', 'AbortError')); }
+        function deadline() { finish(invalidResponse || loadError('CARD_TIMEOUT', '名片讀取超過 60 秒，請稍後重新讀取；尚未傳送任何名片。')); }
+        function retryAfterFailure() {
+          clearTimeout(recoveryTimer);
+          const delay = CARD_RETRY_DELAYS_MS[attempts - 1] + Math.floor(Math.random() * 500);
+          if (performance.now() - startedAt + delay >= CARD_TOTAL_TIMEOUT_MS) return;
+          recordDiagnostic(diagnostic, '名片重試', 'WAIT', attempts + 1, delay);
+          onRecovery(attempts + 1, delay);
+          recoveryTimer = setTimeout(read, delay);
+        }
         function read() {
-          if (settled || attempts >= 2) return;
+          if (settled || invalidResponse || attempts >= CARD_MAX_ATTEMPTS || pending >= 2) return;
+          if (performance.now() - startedAt >= CARD_TOTAL_TIMEOUT_MS) { deadline(); return; }
           clearTimeout(recoveryTimer);
           attempts++;
           pending++;
-          if (attempts === 2) onRecovery();
-          requestShareCard(controller.signal).then(message => finish(null, message), error => {
+          if (diagnostic) diagnostic.attempts = attempts;
+          if (attempts > 1) onRecovery(attempts, 0);
+          requestShareCard(controller.signal, diagnostic, attempts).then(message => finish(null, message), error => {
             pending--;
             if (settled) return;
             if (!error.retryable) invalidResponse = error;
+            // A pending response still has a chance to succeed; do not pile on requests.
             if (pending) return;
-            if (invalidResponse || attempts === 2) { finish(invalidResponse || error); return; }
-            onRecovery();
-            recoveryTimer = setTimeout(read, RETRY_DELAY_MS);
+            if (invalidResponse || attempts === CARD_MAX_ATTEMPTS) { finish(invalidResponse || error); return; }
+            retryAfterFailure();
           });
         }
         if (signal.aborted) { abort(); return; }
         signal.addEventListener('abort', abort, { once: true });
-        deadlineTimer = setTimeout(() => finish(invalidResponse || loadError('CARD_TIMEOUT', '名片讀取超過 60 秒，已嘗試重新連線。請檢查網路後再試；不會自動傳送任何訊息。')), CARD_TOTAL_TIMEOUT_MS);
+        deadlineTimer = setTimeout(deadline, CARD_TOTAL_TIMEOUT_MS);
         read();
         // Keep a slow first response alive; the recovery must not discard fresh edits.
         recoveryTimer = setTimeout(read, CARD_RECOVERY_DELAY_MS);
       });
     }
-    function requestShareCard(signal) {
+    function requestShareCard(signal, diagnostic, attempt) {
       return new Promise((resolve, reject) => {
         if (signal.aborted) { reject(new DOMException('Cancelled', 'AbortError')); return; }
+        const startedAt = performance.now();
+        recordDiagnostic(diagnostic, '名片請求', 'START', attempt);
         const callbackName = 'receiveFlex_' + Date.now() + '_' + (++callbackSequence);
         const script = document.createElement('script');
         let settled = false;
@@ -360,6 +411,7 @@ SOFTWARE.
             window[callbackName] = () => {};
             setTimeout(() => { delete window[callbackName]; }, READ_TIMEOUT_MS);
           } else delete window[callbackName];
+          recordDiagnostic(diagnostic, '名片請求', diagnosticCode(error), attempt, performance.now() - startedAt);
           if (error) reject(error); else resolve(value);
         }
         function abort() { finish(new DOMException('Cancelled', 'AbortError')); }
@@ -368,7 +420,7 @@ SOFTWARE.
             if (!data || data.ok !== true) throw new Error('Google 回傳資料失敗，請重新讀取。');
             const message = validateMessage(data.flexMessage);
             finish(null, message);
-          } catch (error) { finish(error); }
+          } catch (error) { finish(loadError('CARD_DATA', errorText(error))); }
         };
         const url = new URL(GAS_WEBAPP_URL);
         url.searchParams.set('action', 'getShareCard');
@@ -377,7 +429,7 @@ SOFTWARE.
         script.src = url.href;
         script.async = true;
         script.dataset.shareRequest = callbackName;
-        script.onerror = () => finish(loadError('CARD_NETWORK', '無法連線到 Google 名片服務，請檢查網路後重試。', true));
+        script.onerror = () => finish(loadError('CARD_NETWORK', 'Google 名片資料暫時無法取得，請稍後重新讀取。', true));
         script.onload = () => finish(loadError('CARD_RESPONSE', 'Google 未回傳名片資料，請確認網頁部署網址與存取權限。'));
         signal.addEventListener('abort', abort, { once: true });
         document.head.appendChild(script);
@@ -590,6 +642,9 @@ SOFTWARE.
       $('emptyText').textContent = failure ? '暫時無法完成載入' : loadingText;
       $('error').hidden = !failure;
       $('errorText').textContent = failure;
+      const diagnostic = diagnosticHistory[diagnosticHistory.length - 1];
+      $('diagnostics').hidden = !failure && (loading || !diagnostic || diagnostic.attempts < 2);
+      $('diagnosticText').textContent = diagnosticReport();
       $('shareLabel').textContent = state.sharing ? '正在開啟 LINE…' : state.success ? '再次分享' : '選擇好友並分享';
       $('status').classList.toggle('success', state.success);
       $('status').textContent = state.restarting ? '正在重新開啟 LINE…' : state.sharing ? '請在 LINE 選擇對象並確認傳送。' : failure ? '目前無法繼續分享，請查看上方提示。' : state.notice || (loading ? loadingText : '已載入 ' + (state.message ? bubblesOf(state.message).length : 0) + ' 張名片');
@@ -600,6 +655,8 @@ SOFTWARE.
       if (state.sharing || state.restarting) return;
       stopPendingLoads();
       const generation = state.generation;
+      const diagnostic = beginDiagnostics();
+      $('diagnostics').open = false;
       state.controller = new AbortController();
       if (!preserveLoaded) state.message = null;
       state.lineLoading = true;
@@ -619,10 +676,11 @@ SOFTWARE.
       }, 10000);
       updateUi();
       const signal = state.controller.signal;
-      const reportRetry = message => {
+      const reportRetry = (attempt, delay) => {
         if (generation !== state.generation || signal.aborted) return;
         clearTimeout(slowTimer);
-        state.notice = message;
+        state.notice = delay ? '連線暫時失敗，稍後將自動重試（第 ' + attempt + '/' + CARD_MAX_ATTEMPTS + ' 次）…'
+          : '正在自動重新讀取名片（第 ' + attempt + '/' + CARD_MAX_ATTEMPTS + ' 次），請稍候…';
         updateUi();
       };
       let dataTask = null;
@@ -631,6 +689,7 @@ SOFTWARE.
         state.lineLoading = false;
         state.lineError = errorText(error);
         state.lineErrorCode = error.code || '';
+        recordDiagnostic(diagnostic, 'LINE', diagnosticCode(error));
         updateUi();
       };
       const lineTask = prepareLine(signal, client => {
@@ -640,10 +699,11 @@ SOFTWARE.
         state.lineLoading = false;
         state.lineError = state.lineErrorCode = '';
         state.notice = '';
+        recordDiagnostic(diagnostic, 'LINE', 'READY');
         state.dataLoading = !state.message;
         updateUi();
         // Start JSONP/images only after LINE is ready, like the club share page.
-        dataTask = (state.message ? Promise.resolve(state.message) : loadShareCard(signal, () => reportRetry('名片回應較慢或連線不穩，正在自動補讀一次，請稍候…'))).then(message => {
+        dataTask = (state.message ? Promise.resolve(state.message) : loadShareCard(signal, reportRetry, diagnostic)).then(message => {
           if (generation !== state.generation || signal.aborted) return;
           state.message = message;
           renderPreview(message, generation);
@@ -657,6 +717,7 @@ SOFTWARE.
         state.lineStage = stage;
         state.lineLoading = true;
         state.lineError = state.lineErrorCode = state.notice = '';
+        recordDiagnostic(diagnostic, 'LINE', stage === 'login' ? 'LOGIN_WAIT' : 'INIT_WAIT');
         updateUi();
       }, lineFailed).catch(lineFailed).finally(() => {
         if (generation === state.generation) { state.lineLoading = false; updateUi(); }
