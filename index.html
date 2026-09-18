@@ -41,10 +41,12 @@ SOFTWARE.
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
+  <meta name="share-page-version" content="2026-09-18-sequential-init">
   <title>轉分享LINE名片</title>
   <link rel="preconnect" href="https://static.line-scdn.net" crossorigin>
   <link rel="preconnect" href="https://script.google.com">
   <link rel="preconnect" href="https://script.googleusercontent.com">
+  <script id="line-sdk" defer src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
     :root { color-scheme: light; --ink: #232b29; --muted: #69736e; --line: #dfe5e1; --green: #14734e; --paper: #f5f7f6; }
     * { box-sizing: border-box; letter-spacing: 0; }
@@ -139,7 +141,7 @@ SOFTWARE.
     </div>
     <p class="notice"><span data-icon="info"></span><span>網頁預覽可能因網速、裝置、字型或 LINE 版本而有載入或排版差異，實際呈現以 LINE 收到的卡片為準。若無法預覽，請關閉頁面重新轉分享一次。</span></p>
     <div id="error" class="error" role="alert" hidden><p id="errorText"></p><div class="recovery-actions"><button id="retry" class="secondary" type="button">重新讀取</button><button id="closeRecovery" class="secondary" type="button" hidden>關閉此頁</button></div></div>
-    <div id="empty" class="empty-state" aria-live="polite"><span class="spinner" id="spinner" aria-hidden="true"></span><span id="emptyText">正在讀取名片…</span></div>
+    <div id="empty" class="empty-state" aria-live="polite"><span class="spinner" id="spinner" aria-hidden="true"></span><span id="emptyText">正在載入 LINE 元件…</span></div>
     <div id="track" class="track" role="region" aria-label="即將分享的名片" tabindex="0" hidden></div>
     <p id="imageWarning" class="image-warning" hidden>部分圖片無法預覽，請確認圖片網址與公開權限後再分享。</p>
     <section id="summary" class="summary" hidden>
@@ -150,7 +152,7 @@ SOFTWARE.
   </main>
   <footer class="actions">
     <div class="actions-inner">
-      <div id="status" class="status" role="status" aria-live="polite">正在連接 LINE 與讀取名片…</div>
+      <div id="status" class="status" role="status" aria-live="polite">正在載入 LINE 元件…</div>
       <div class="action-buttons">
         <button id="close" class="secondary" type="button" hidden>關閉</button>
         <button id="share" class="primary" type="button" disabled><span data-icon="share"></span><span id="shareLabel">選擇好友並分享</span></button>
@@ -167,12 +169,12 @@ SOFTWARE.
     const CARD_RECOVERY_DELAY_MS = 15000;
     const CARD_TOTAL_TIMEOUT_MS = 60000;
     const RETRY_DELAY_MS = 1500;
-    const SDK_URL = 'https://static.line-scdn.net/liff/edge/2/sdk.js';
     const $ = id => document.getElementById(id);
-    const state = { generation: 0, controller: null, message: null, lineReady: false, lineClient: null, dataLoading: false, lineLoading: false, sharing: false, restarting: false, dataError: '', lineError: '', lineErrorCode: '', notice: '', success: false };
+    const state = { generation: 0, controller: null, message: null, lineReady: false, lineClient: null, lineStage: 'sdk', dataLoading: false, lineLoading: false, sharing: false, restarting: false, dataError: '', lineError: '', lineErrorCode: '', notice: '', success: false };
     let sdkPromise = null;
     let linePromise = null;
     let lineSdk = null;
+    let loginStarted = false;
     let callbackSequence = 0;
     let slowTimer = null;
     let restartTimer = null;
@@ -243,73 +245,60 @@ SOFTWARE.
         visibilityChanged();
       });
     }
-    function retryDelay(signal) {
-      return new Promise((resolve, reject) => {
-        let timer;
-        function abort() {
-          clearTimeout(timer);
-          signal.removeEventListener('abort', abort);
-          reject(new DOMException('Cancelled', 'AbortError'));
-        }
-        if (signal.aborted) { abort(); return; }
-        signal.addEventListener('abort', abort, { once: true });
-        timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, RETRY_DELAY_MS);
-      });
-    }
-    async function retryLoadOnce(operation, signal, onRetry) {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
-        try { return await operation(); }
-        catch (error) {
-          if (signal.aborted || !error.retryable || attempt === 1) throw error;
-          onRetry();
-          await retryDelay(signal);
-        }
-      }
-    }
     function loadSdk() {
       if (sdkPromise) return sdkPromise;
-      if (window.liff) { sdkPromise = Promise.resolve(window.liff); return sdkPromise; }
       sdkPromise = new Promise((resolve, reject) => {
-        const script = document.createElement('script');
+        const script = $('line-sdk');
         let settled = false;
-        let timer;
         function finish(error) {
           if (settled) return;
           settled = true;
-          clearTimeout(timer);
-          script.onload = script.onerror = null;
-          script.remove();
+          document.removeEventListener('DOMContentLoaded', ready);
+          script.removeEventListener('error', failed);
           if (error) reject(error); else resolve(window.liff);
         }
-        script.async = true;
-        script.src = SDK_URL;
-        script.onload = () => finish(window.liff ? null : loadError('SDK_RESPONSE', 'LINE 元件載入失敗，請重新連線。'));
-        script.onerror = () => finish(loadError('SDK_NETWORK', '無法載入 LINE 元件，請檢查網路後再試。', true));
-        timer = setTimeout(() => finish(loadError('SDK_TIMEOUT', '連接 LINE 元件逾時，請檢查網路後再試。', true)), READ_TIMEOUT_MS);
-        document.head.appendChild(script);
-      }).catch(error => { sdkPromise = null; throw error; });
+        function failed() { finish(loadError('SDK_NETWORK', '無法載入 LINE 元件。請檢查網路後按「重新開啟 LINE」。')); }
+        function ready() {
+          if (!window.liff || typeof window.liff.init !== 'function') { failed(); return; }
+          finish();
+        }
+        // One deferred SDK per document. Never start a competing download on timeout.
+        script.addEventListener('error', failed, { once: true });
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready, { once: true });
+        else ready();
+      });
       return sdkPromise;
     }
-    async function prepareLine(signal, onReady, onRetry) {
-      const sdk = await retryLoadOnce(loadSdk, signal, onRetry);
+    async function prepareLine(signal, onReady, onStage, onFailure) {
+      const sdk = await timeout(loadSdk(), READ_TIMEOUT_MS, loadError('SDK_TIMEOUT', 'LINE 元件載入逾時。請檢查網路後按「重新開啟 LINE」。'), signal);
       if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
       lineSdk = sdk;
+      onStage('init');
       if (!linePromise) {
-        linePromise = Promise.resolve().then(() => sdk.init({ liffId: LIFF_ID, withLoginOnExternalBrowser: true }))
-          .catch(error => { linePromise = null; throw error; });
+        linePromise = Promise.resolve().then(() => sdk.init({ liffId: LIFF_ID }))
+          .catch(error => { throw loadError('LINE_INIT_FAILED', 'LINE 初始化失敗，請按「重新開啟 LINE」。' + errorText(error)); });
       }
-      const initialized = linePromise.then(() => {
+      const initialized = linePromise.then(async () => {
         if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
-        if (!sdk.isLoggedIn()) throw loadError('LINE_LOGIN', 'LINE 尚未登入，請關閉後從 LINE 重新開啟並完成授權。');
+        if (!sdk.isLoggedIn()) {
+          if (sdk.isInClient()) throw loadError('LINE_LOGIN', 'LINE 尚未完成登入，請按「重新開啟 LINE」並完成授權。');
+          onStage('login');
+          if (!loginStarted) {
+            loginStarted = true;
+            // The SDK has finished processing its callback URL before login begins.
+            sdk.login({ redirectUri: window.location.href });
+          }
+          await timeout(new Promise(() => {}), READ_TIMEOUT_MS, loadError('LINE_LOGIN_TIMEOUT', '尚未完成 LINE 登入。請按「重新開啟 LINE」再次登入；不會自動傳送名片。'), signal);
+          return;
+        }
         if (!sdk.isApiAvailable('shareTargetPicker')) throw loadError('LINE_UNAVAILABLE', '目前無法使用 LINE 分享，請確認 LINE 版本及分享功能設定。');
-        // A slow first-time authorization may complete after the UI deadline.
-        // Recover that same initialization; never start a second one in parallel.
         onReady(sdk);
         return sdk;
       });
-      // SDK download and initialization have independent deadlines.
-      return timeout(initialized, READ_TIMEOUT_MS, loadError('LINE_INIT_TIMEOUT', 'LINE 登入連線逾時。請按「重新開啟 LINE」重建連線；若仍無反應，請關閉此頁後，從名片再次點選轉分享。尚未傳送任何名片。'), signal);
+      // Late initialization can still recover while this document remains active.
+      initialized.catch(onFailure);
+      await timeout(linePromise, READ_TIMEOUT_MS, loadError('LINE_INIT_TIMEOUT', 'LINE 登入連線逾時。請按「重新開啟 LINE」重建連線；若仍無反應，請關閉此頁後，從名片再次點選轉分享。尚未傳送任何名片。'), signal);
+      return initialized;
     }
     function loadShareCard(signal, onRecovery) {
       return new Promise((resolve, reject) => {
@@ -544,7 +533,7 @@ SOFTWARE.
       if (card) track.scrollTo({ left: track.scrollLeft + card.getBoundingClientRect().left - track.getBoundingClientRect().left - 6, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
     }
     function needsLineRestart() {
-      return ['LINE_INIT_TIMEOUT', 'LINE_LOGIN', 'LINE_SESSION_EXPIRED'].includes(state.lineErrorCode);
+      return ['SDK_NETWORK', 'SDK_TIMEOUT', 'LINE_INIT_FAILED', 'LINE_INIT_TIMEOUT', 'LINE_LOGIN', 'LINE_LOGIN_TIMEOUT', 'LINE_SESSION_EXPIRED'].includes(state.lineErrorCode);
     }
     function canCloseLine() {
       try { return !!lineSdk && lineSdk.isInClient(); } catch { return false; }
@@ -584,6 +573,9 @@ SOFTWARE.
     }
     function updateUi() {
       const loading = state.dataLoading || state.lineLoading;
+      const loadingText = state.lineLoading
+        ? state.lineStage === 'sdk' ? '正在載入 LINE 元件…' : state.lineStage === 'login' ? '正在前往 LINE 登入…' : '正在連接 LINE…'
+        : '正在讀取名片…';
       const restart = needsLineRestart();
       const failure = [state.lineError, state.dataError].filter(Boolean).join('\n');
       $('share').disabled = !state.message || !state.lineReady || loading || state.sharing || state.restarting || !!failure;
@@ -595,12 +587,12 @@ SOFTWARE.
       $('closeRecovery').hidden = !restart || !canCloseLine();
       $('empty').hidden = !!state.message;
       $('spinner').hidden = !loading;
-      $('emptyText').textContent = failure ? '暫時無法完成載入' : '正在讀取名片…';
+      $('emptyText').textContent = failure ? '暫時無法完成載入' : loadingText;
       $('error').hidden = !failure;
       $('errorText').textContent = failure;
       $('shareLabel').textContent = state.sharing ? '正在開啟 LINE…' : state.success ? '再次分享' : '選擇好友並分享';
       $('status').classList.toggle('success', state.success);
-      $('status').textContent = state.restarting ? '正在重新開啟 LINE…' : state.sharing ? '請在 LINE 選擇對象並確認傳送。' : failure ? '目前無法繼續分享，請查看上方提示。' : state.notice || (state.dataLoading ? '正在讀取名片…' : state.lineLoading ? '名片已載入，正在連接 LINE…' : '已載入 ' + (state.message ? bubblesOf(state.message).length : 0) + ' 張名片');
+      $('status').textContent = state.restarting ? '正在重新開啟 LINE…' : state.sharing ? '請在 LINE 選擇對象並確認傳送。' : failure ? '目前無法繼續分享，請查看上方提示。' : state.notice || (loading ? loadingText : '已載入 ' + (state.message ? bubblesOf(state.message).length : 0) + ' 張名片');
       $('close').hidden = !state.success || !state.lineClient || !state.lineClient.isInClient();
       if (!loading) { clearTimeout(slowTimer); slowTimer = null; }
     }
@@ -610,8 +602,9 @@ SOFTWARE.
       if (state.controller) state.controller.abort();
       state.controller = new AbortController();
       if (!preserveLoaded) state.message = null;
-      state.dataLoading = !state.message;
+      state.dataLoading = false;
       state.lineLoading = true;
+      state.lineStage = 'sdk';
       state.lineReady = false;
       state.lineClient = null;
       state.dataError = state.lineError = state.lineErrorCode = state.notice = '';
@@ -628,7 +621,6 @@ SOFTWARE.
         }
       }, 10000);
       updateUi();
-      // Independent public-card loading and LINE initialization run concurrently.
       const signal = state.controller.signal;
       const reportRetry = message => {
         if (generation !== state.generation || signal.aborted) return;
@@ -636,32 +628,45 @@ SOFTWARE.
         state.notice = message;
         updateUi();
       };
-      const dataTask = (state.message ? Promise.resolve(state.message) : loadShareCard(signal, () => reportRetry('名片回應較慢或連線不穩，正在自動補讀一次，請稍候…'))).then(message => {
-        if (generation !== state.generation) return;
-        state.message = message;
-        renderPreview(message, generation);
-      }).catch(error => {
-        if (generation === state.generation && error.name !== 'AbortError') state.dataError = errorText(error);
-      }).finally(() => {
-        if (generation === state.generation) { state.dataLoading = false; state.notice = ''; updateUi(); }
-      });
+      let dataTask = null;
+      const lineFailed = error => {
+        if (generation !== state.generation || signal.aborted || error.name === 'AbortError') return;
+        state.lineLoading = false;
+        state.lineError = errorText(error);
+        state.lineErrorCode = error.code || '';
+        updateUi();
+      };
       const lineTask = prepareLine(signal, client => {
-        if (generation !== state.generation || signal.aborted) return;
+        if (generation !== state.generation || signal.aborted || dataTask) return;
         state.lineReady = true;
         state.lineClient = client;
         state.lineLoading = false;
+        state.lineStage = 'ready';
         state.lineError = state.lineErrorCode = '';
-        if (!state.dataLoading) state.notice = '';
+        state.notice = '';
+        state.dataLoading = !state.message;
         updateUi();
-      }, () => reportRetry('LINE 元件連線暫時不穩，正在自動重新連線一次…')).catch(error => {
-        if (generation === state.generation && error.name !== 'AbortError') {
-          state.lineError = errorText(error);
-          state.lineErrorCode = error.code || '';
-        }
-      }).finally(() => {
+        // Start JSONP/images only after LINE is ready, like the club share page.
+        dataTask = (state.message ? Promise.resolve(state.message) : loadShareCard(signal, () => reportRetry('名片回應較慢或連線不穩，正在自動補讀一次，請稍候…'))).then(message => {
+          if (generation !== state.generation || signal.aborted) return;
+          state.message = message;
+          renderPreview(message, generation);
+        }).catch(error => {
+          if (generation === state.generation && error.name !== 'AbortError') state.dataError = errorText(error);
+        }).finally(() => {
+          if (generation === state.generation) { state.dataLoading = false; state.notice = ''; updateUi(); }
+        });
+      }, stage => {
+        if (generation !== state.generation || signal.aborted) return;
+        state.lineStage = stage;
+        state.lineLoading = true;
+        state.lineError = state.lineErrorCode = state.notice = '';
+        updateUi();
+      }, lineFailed).catch(lineFailed).finally(() => {
         if (generation === state.generation) { state.lineLoading = false; updateUi(); }
       });
-      await Promise.allSettled([dataTask, lineTask]);
+      await lineTask;
+      if (dataTask) await dataTask;
     }
     async function share() {
       if ($('share').disabled || state.sharing || !state.message) return;
@@ -674,7 +679,6 @@ SOFTWARE.
         const client = state.lineClient;
         if (!client || !client.isLoggedIn() || !client.isApiAvailable('shareTargetPicker')) {
           state.lineReady = false;
-          linePromise = null;
           throw loadError('LINE_SESSION_EXPIRED', 'LINE 登入或分享狀態已失效，請按「重新開啟 LINE」重建連線。');
         }
         const result = await client.shareTargetPicker([state.message]);
