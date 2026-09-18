@@ -41,7 +41,7 @@ SOFTWARE.
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
-  <meta name="share-page-version" content="2026-09-18-bounded-recovery">
+  <meta name="share-page-version" content="2026-09-18-cached-preview">
   <title>轉分享LINE名片</title>
   <link rel="preconnect" href="https://static.line-scdn.net" crossorigin>
   <link rel="preconnect" href="https://script.google.com">
@@ -54,7 +54,7 @@ SOFTWARE.
     body { margin: 0; color: var(--ink); background: var(--paper); font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "Noto Sans TC", sans-serif; padding-bottom: calc(112px + env(safe-area-inset-bottom)); }
     button { font: inherit; cursor: pointer; touch-action: manipulation; }
     button:disabled { cursor: default; }
-    button:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline: 3px solid #76b8ec; outline-offset: 3px; }
+    button:focus-visible, [tabindex]:focus-visible { outline: 3px solid #76b8ec; outline-offset: 3px; }
     .topbar { background: white; border-bottom: 1px solid var(--line); }
     .topbar-inner, main, .actions-inner { max-width: 1040px; margin: auto; padding-inline: 24px; }
     .topbar-inner { min-height: 76px; display: flex; align-items: center; gap: 12px; }
@@ -91,9 +91,6 @@ SOFTWARE.
     @keyframes turn { to { transform: rotate(360deg); } }
     .error { margin: 20px 0; padding: 12px 16px; border-left: 3px solid #bc3d34; background: #fff0ee; color: #8e332c; overflow-wrap: anywhere; }
     .error p { margin: 0 0 10px; white-space: pre-wrap; }
-    .diagnostics { margin: 16px 0; color: var(--muted); font-size: 13px; }
-    .diagnostics summary { cursor: pointer; }
-    .diagnostics pre { margin: 8px 0; font: 12px/1.6 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
     .recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; }
     .secondary { border: 1px solid #c6d2cb; color: #3f5046; background: white; border-radius: 6px; padding: 8px 14px; font-weight: 600; }
     .secondary:disabled { opacity: .5; }
@@ -144,7 +141,7 @@ SOFTWARE.
     </div>
     <p class="notice"><span data-icon="info"></span><span>網頁預覽可能因網速、裝置、字型或 LINE 版本而有載入或排版差異，實際呈現以 LINE 收到的卡片為準。若無法預覽，請關閉頁面重新轉分享一次。</span></p>
     <div id="error" class="error" role="alert" hidden><p id="errorText"></p><div class="recovery-actions"><button id="retry" class="secondary" type="button">重新讀取</button><button id="closeRecovery" class="secondary" type="button" hidden>關閉此頁</button></div></div>
-    <details id="diagnostics" class="diagnostics" hidden><summary>連線診斷</summary><pre id="diagnosticText"></pre></details>
+    <p id="cacheNotice" class="image-warning" role="status" hidden></p>
     <div id="empty" class="empty-state" aria-live="polite"><span class="spinner" id="spinner" aria-hidden="true"></span><span id="emptyText">正在載入 LINE 元件…</span></div>
     <div id="track" class="track" role="region" aria-label="即將分享的名片" tabindex="0" hidden></div>
     <p id="imageWarning" class="image-warning" hidden>部分圖片無法預覽，請確認圖片網址與公開權限後再分享。</p>
@@ -174,8 +171,11 @@ SOFTWARE.
     const CARD_TOTAL_TIMEOUT_MS = 60000;
     const CARD_RETRY_DELAYS_MS = [2000, 5000];
     const CARD_MAX_ATTEMPTS = CARD_RETRY_DELAYS_MS.length + 1;
+    const CARD_CACHE_MAX_AGE_MS = 10 * 60 * 1000;
+    const CARD_CACHE_MAX_LENGTH = 200000;
+    const CARD_CACHE_KEY = 'insurance-public-card-v1:' + JSON.stringify([LIFF_ID, GAS_WEBAPP_URL]);
     const $ = id => document.getElementById(id);
-    const state = { generation: 0, controller: null, message: null, lineReady: false, lineClient: null, lineStage: 'sdk', dataLoading: false, lineLoading: false, sharing: false, restarting: false, dataError: '', lineError: '', lineErrorCode: '', notice: '', success: false };
+    const state = { generation: 0, controller: null, message: null, cachedAt: 0, fromCache: false, cacheWarning: false, pendingCard: null, lineReady: false, lineClient: null, lineStage: 'sdk', dataLoading: false, lineLoading: false, sharing: false, restarting: false, dataError: '', lineError: '', lineErrorCode: '', notice: '', success: false };
     let sdkPromise = null;
     let linePromise = null;
     let lineSdk = null;
@@ -183,7 +183,7 @@ SOFTWARE.
     let callbackSequence = 0;
     let slowTimer = null;
     let restartTimer = null;
-    const diagnosticHistory = [];
+    let cacheExpiryTimer = null;
 
     // Lucide icons (ISC license), bundled to avoid another network dependency.
     const icons = {
@@ -212,35 +212,33 @@ SOFTWARE.
     function loadError(code, message, retryable = false) {
       return Object.assign(new Error(message), { code, retryable });
     }
-    function beginDiagnostics() {
-      const run = { at: new Date().toISOString(), started: performance.now(), attempts: 0, events: [] };
-      diagnosticHistory.push(run);
-      if (diagnosticHistory.length > 3) diagnosticHistory.shift();
-      recordDiagnostic(run, 'LINE', 'SDK_WAIT');
-      return run;
+    function clearCardCache() {
+      try { localStorage.removeItem(CARD_CACHE_KEY); } catch {}
     }
-    function diagnosticCode(error) {
-      if (!error) return 'OK';
-      if (error.name === 'AbortError') return 'CANCELLED';
-      // Only our own codes are retained, never SDK messages, URLs or card data.
-      return ['SDK_NETWORK', 'SDK_TIMEOUT', 'LINE_INIT_FAILED', 'LINE_INIT_TIMEOUT', 'LINE_LOGIN', 'LINE_LOGIN_TIMEOUT', 'LINE_UNAVAILABLE', 'CARD_NETWORK', 'CARD_RESPONSE', 'CARD_DATA', 'CARD_TIMEOUT'].includes(error.code) ? error.code : 'ERROR';
+    function cacheIsCurrent(savedAt) {
+      const age = Date.now() - savedAt;
+      return Number.isFinite(savedAt) && savedAt > 0 && age >= 0 && age < CARD_CACHE_MAX_AGE_MS;
     }
-    function recordDiagnostic(run, phase, code, attempt = 0, durationMs = 0) {
-      if (!run) return;
-      const previous = run.events[run.events.length - 1];
-      if (previous && previous.phase === phase && previous.code === code && previous.attempt === attempt) return;
-      run.events.push({ phase, code, attempt, durationMs: Math.round(durationMs), elapsedMs: Math.round(performance.now() - run.started) });
-      if (run.events.length > 24) run.events.shift();
+    function readCardCache() {
+      try {
+        const raw = localStorage.getItem(CARD_CACHE_KEY);
+        if (!raw) return null;
+        if (raw.length > CARD_CACHE_MAX_LENGTH) throw new Error('Oversized cache');
+        const cached = JSON.parse(raw);
+        if (!cached || !cacheIsCurrent(cached.savedAt)) throw new Error('Expired cache');
+        return { message: validateMessage(cached.message), savedAt: cached.savedAt };
+      } catch {
+        clearCardCache();
+        return null;
+      }
     }
-    function diagnosticReport() {
-      const version = document.querySelector('meta[name="share-page-version"]').content;
-      const lines = ['版本：' + version, 'HTTP 狀態：JSONP 無法取得', '紀錄僅留在本頁，關閉後不保留。'];
-      diagnosticHistory.forEach((run, index) => {
-        lines.push('', '紀錄 ' + (index + 1) + '｜開始時間 (UTC)：' + run.at, '名片請求：' + run.attempts + ' 次');
-        run.events.forEach(event => lines.push('+' + (event.elapsedMs / 1000).toFixed(2) + 's ' + event.phase + ' ' + event.code +
-          (event.attempt ? ' #' + event.attempt : '') + (event.durationMs ? ' (' + (event.durationMs / 1000).toFixed(2) + 's)' : '')));
-      });
-      return lines.join('\n');
+    function writeCardCache(message, savedAt) {
+      try {
+        // Only the public Flex payload is stored, never LINE credentials or page URLs.
+        const raw = JSON.stringify({ savedAt, message });
+        if (raw.length > CARD_CACHE_MAX_LENGTH) { clearCardCache(); return; }
+        localStorage.setItem(CARD_CACHE_KEY, raw);
+      } catch { clearCardCache(); }
     }
     function timeout(promise, ms, error, signal) {
       return new Promise((resolve, reject) => {
@@ -336,7 +334,7 @@ SOFTWARE.
       await timeout(linePromise, READ_TIMEOUT_MS, loadError('LINE_INIT_TIMEOUT', 'LINE 登入連線逾時。請按「重新開啟 LINE」重建連線；若仍無反應，請關閉此頁後，從名片再次點選轉分享。尚未傳送任何名片。'), signal);
       return initialized;
     }
-    function loadShareCard(signal, onRecovery, diagnostic) {
+    function loadShareCard(signal, onRecovery) {
       return new Promise((resolve, reject) => {
         const controller = new AbortController();
         const startedAt = performance.now();
@@ -353,16 +351,14 @@ SOFTWARE.
           clearTimeout(recoveryTimer);
           signal.removeEventListener('abort', abort);
           controller.abort();
-          recordDiagnostic(diagnostic, '名片讀取', diagnosticCode(error), 0, performance.now() - startedAt);
           if (error) reject(error); else resolve(value);
         }
         function abort() { finish(new DOMException('Cancelled', 'AbortError')); }
-        function deadline() { finish(invalidResponse || loadError('CARD_TIMEOUT', '名片讀取超過 60 秒，請稍後重新讀取；尚未傳送任何名片。')); }
+        function deadline() { finish(invalidResponse || loadError('CARD_TIMEOUT', '名片讀取超過 60 秒，請稍後重新讀取。')); }
         function retryAfterFailure() {
           clearTimeout(recoveryTimer);
           const delay = CARD_RETRY_DELAYS_MS[attempts - 1] + Math.floor(Math.random() * 500);
           if (performance.now() - startedAt + delay >= CARD_TOTAL_TIMEOUT_MS) return;
-          recordDiagnostic(diagnostic, '名片重試', 'WAIT', attempts + 1, delay);
           onRecovery(attempts + 1, delay);
           recoveryTimer = setTimeout(read, delay);
         }
@@ -372,9 +368,8 @@ SOFTWARE.
           clearTimeout(recoveryTimer);
           attempts++;
           pending++;
-          if (diagnostic) diagnostic.attempts = attempts;
           if (attempts > 1) onRecovery(attempts, 0);
-          requestShareCard(controller.signal, diagnostic, attempts).then(message => finish(null, message), error => {
+          requestShareCard(controller.signal).then(message => finish(null, message), error => {
             pending--;
             if (settled) return;
             if (!error.retryable) invalidResponse = error;
@@ -392,11 +387,9 @@ SOFTWARE.
         recoveryTimer = setTimeout(read, CARD_RECOVERY_DELAY_MS);
       });
     }
-    function requestShareCard(signal, diagnostic, attempt) {
+    function requestShareCard(signal) {
       return new Promise((resolve, reject) => {
         if (signal.aborted) { reject(new DOMException('Cancelled', 'AbortError')); return; }
-        const startedAt = performance.now();
-        recordDiagnostic(diagnostic, '名片請求', 'START', attempt);
         const callbackName = 'receiveFlex_' + Date.now() + '_' + (++callbackSequence);
         const script = document.createElement('script');
         let settled = false;
@@ -411,7 +404,6 @@ SOFTWARE.
             window[callbackName] = () => {};
             setTimeout(() => { delete window[callbackName]; }, READ_TIMEOUT_MS);
           } else delete window[callbackName];
-          recordDiagnostic(diagnostic, '名片請求', diagnosticCode(error), attempt, performance.now() - startedAt);
           if (error) reject(error); else resolve(value);
         }
         function abort() { finish(new DOMException('Cancelled', 'AbortError')); }
@@ -523,7 +515,7 @@ SOFTWARE.
         image.loading = hero ? 'eager' : 'lazy';
         image.style.objectFit = node.aspectMode === 'fit' ? 'contain' : 'cover';
         image.addEventListener('error', () => {
-          if (generation !== state.generation) return;
+          if (generation !== state.generation || !element.isConnected) return;
           const fallback = document.createElement('div');
           fallback.className = 'image-error';
           fallback.textContent = '圖片暫時無法顯示';
@@ -544,6 +536,7 @@ SOFTWARE.
       return element;
     }
     function renderPreview(message, generation) {
+      $('imageWarning').hidden = true;
       const bubbles = bubblesOf(message);
       const fragment = document.createDocumentFragment();
       bubbles.forEach((bubble, index) => {
@@ -566,6 +559,45 @@ SOFTWARE.
       $('summary').hidden = false;
       $('navigation').hidden = bubbles.length < 2;
       updateNavigation();
+    }
+    function clearPreview() {
+      clearTimeout(cacheExpiryTimer);
+      state.message = null;
+      state.fromCache = state.cacheWarning = false;
+      state.cachedAt = 0;
+      $('track').replaceChildren();
+      $('summaryText').textContent = '';
+      $('track').hidden = $('summary').hidden = $('navigation').hidden = $('imageWarning').hidden = true;
+    }
+    function expireCachedPreview() {
+      if (!state.fromCache || cacheIsCurrent(state.cachedAt) || state.sharing) return;
+      clearPreview();
+      if (!state.dataLoading) state.dataError = '[CARD_CACHE_EXPIRED] 上次載入的名片已到期，請重新讀取。';
+      updateUi();
+    }
+    function applyCard(message, savedAt, fromCache = false) {
+      const changed = !state.message || JSON.stringify(message) !== JSON.stringify(state.message);
+      state.message = message;
+      state.cachedAt = savedAt;
+      state.fromCache = fromCache;
+      state.cacheWarning = false;
+      state.dataError = '';
+      clearTimeout(cacheExpiryTimer);
+      if (fromCache) cacheExpiryTimer = setTimeout(expireCachedPreview, Math.max(0, CARD_CACHE_MAX_AGE_MS - (Date.now() - savedAt)));
+      if (changed || $('track').hidden) renderPreview(message, state.generation);
+    }
+    function acceptCardResult(result) {
+      // Never replace the preview while LINE is choosing recipients for that snapshot.
+      if (state.sharing) { state.pendingCard = result; return; }
+      if (result.message) {
+        applyCard(result.message, result.savedAt);
+      } else if (state.fromCache && cacheIsCurrent(state.cachedAt) && ['CARD_NETWORK', 'CARD_TIMEOUT'].includes(result.error.code)) {
+        state.cacheWarning = true;
+      } else {
+        clearCardCache();
+        clearPreview();
+        state.dataError = errorText(result.error);
+      }
     }
     function updateNavigation() {
       const track = $('track');
@@ -595,6 +627,8 @@ SOFTWARE.
       if (state.controller) state.controller.abort();
       clearTimeout(slowTimer);
       clearTimeout(restartTimer);
+      clearTimeout(cacheExpiryTimer);
+      state.pendingCard = null;
       state.dataLoading = state.lineLoading = state.lineReady = false;
     }
     function restartLine() {
@@ -624,13 +658,13 @@ SOFTWARE.
       updateUi();
     }
     function updateUi() {
-      const loading = state.dataLoading || state.lineLoading;
+      const loading = state.lineLoading || (state.dataLoading && !state.message);
       const loadingText = state.lineLoading
         ? state.lineStage === 'sdk' ? '正在載入 LINE 元件…' : state.lineStage === 'login' ? '正在前往 LINE 登入…' : '正在連接 LINE…'
         : '正在讀取名片…';
       const restart = needsLineRestart();
       const failure = [state.lineError, state.dataError].filter(Boolean).join('\n');
-      $('share').disabled = !state.message || !state.lineReady || loading || state.sharing || state.restarting || !!failure;
+      $('share').disabled = !state.message || !state.lineReady || loading || state.sharing || state.restarting || !!failure || (state.fromCache && !cacheIsCurrent(state.cachedAt));
       $('reload').disabled = (loading && !restart) || state.sharing || state.restarting;
       $('reload').title = restart ? '重新開啟 LINE' : '重新讀取名片';
       $('reload').setAttribute('aria-label', $('reload').title);
@@ -642,23 +676,22 @@ SOFTWARE.
       $('emptyText').textContent = failure ? '暫時無法完成載入' : loadingText;
       $('error').hidden = !failure;
       $('errorText').textContent = failure;
-      const diagnostic = diagnosticHistory[diagnosticHistory.length - 1];
-      $('diagnostics').hidden = !failure && (loading || !diagnostic || diagnostic.attempts < 2);
-      $('diagnosticText').textContent = diagnosticReport();
+      $('cacheNotice').hidden = !state.fromCache;
+      $('cacheNotice').textContent = state.cacheWarning ? '暫時無法更新，目前顯示上次成功載入的名片。'
+        : state.dataLoading ? '已載入上次名片，正在確認最新內容。' : '目前顯示上次成功載入的名片。';
       $('shareLabel').textContent = state.sharing ? '正在開啟 LINE…' : state.success ? '再次分享' : '選擇好友並分享';
       $('status').classList.toggle('success', state.success);
       $('status').textContent = state.restarting ? '正在重新開啟 LINE…' : state.sharing ? '請在 LINE 選擇對象並確認傳送。' : failure ? '目前無法繼續分享，請查看上方提示。' : state.notice || (loading ? loadingText : '已載入 ' + (state.message ? bubblesOf(state.message).length : 0) + ' 張名片');
       $('close').hidden = !state.success || !state.lineClient || !state.lineClient.isInClient();
       if (!loading) { clearTimeout(slowTimer); slowTimer = null; }
     }
-    async function start({ preserveLoaded = false } = {}) {
+    async function start({ preserveLoaded = false, forceRefresh = false } = {}) {
       if (state.sharing || state.restarting) return;
       stopPendingLoads();
       const generation = state.generation;
-      const diagnostic = beginDiagnostics();
-      $('diagnostics').open = false;
       state.controller = new AbortController();
-      if (!preserveLoaded) state.message = null;
+      if (forceRefresh) clearCardCache();
+      if (forceRefresh || !preserveLoaded || (state.fromCache && !cacheIsCurrent(state.cachedAt))) clearPreview();
       state.lineLoading = true;
       state.lineStage = 'sdk';
       state.lineClient = null;
@@ -677,7 +710,7 @@ SOFTWARE.
       updateUi();
       const signal = state.controller.signal;
       const reportRetry = (attempt, delay) => {
-        if (generation !== state.generation || signal.aborted) return;
+        if (generation !== state.generation || signal.aborted || state.message) return;
         clearTimeout(slowTimer);
         state.notice = delay ? '連線暫時失敗，稍後將自動重試（第 ' + attempt + '/' + CARD_MAX_ATTEMPTS + ' 次）…'
           : '正在自動重新讀取名片（第 ' + attempt + '/' + CARD_MAX_ATTEMPTS + ' 次），請稍候…';
@@ -689,7 +722,6 @@ SOFTWARE.
         state.lineLoading = false;
         state.lineError = errorText(error);
         state.lineErrorCode = error.code || '';
-        recordDiagnostic(diagnostic, 'LINE', diagnosticCode(error));
         updateUi();
       };
       const lineTask = prepareLine(signal, client => {
@@ -699,25 +731,34 @@ SOFTWARE.
         state.lineLoading = false;
         state.lineError = state.lineErrorCode = '';
         state.notice = '';
-        recordDiagnostic(diagnostic, 'LINE', 'READY');
-        state.dataLoading = !state.message;
+        const retained = !!state.message;
+        const cached = !retained && !forceRefresh ? readCardCache() : null;
+        if (cached) applyCard(cached.message, cached.savedAt, true);
+        else if (retained && state.fromCache) applyCard(state.message, state.cachedAt, true);
+        state.dataLoading = !retained || state.fromCache;
         updateUi();
-        // Start JSONP/images only after LINE is ready, like the club share page.
-        dataTask = (state.message ? Promise.resolve(state.message) : loadShareCard(signal, reportRetry, diagnostic)).then(message => {
+        if (!state.dataLoading) { dataTask = Promise.resolve(); return; }
+        const background = !!state.message;
+        // Cached previews do not delay sharing; refresh only after LINE is ready.
+        dataTask = loadShareCard(signal, reportRetry).then(message => {
           if (generation !== state.generation || signal.aborted) return;
-          state.message = message;
-          renderPreview(message, generation);
+          const savedAt = Date.now();
+          writeCardCache(message, savedAt);
+          acceptCardResult({ message, savedAt });
         }).catch(error => {
-          if (generation === state.generation && error.name !== 'AbortError') state.dataError = errorText(error);
+          if (generation === state.generation && !signal.aborted && error.name !== 'AbortError') acceptCardResult({ error });
         }).finally(() => {
-          if (generation === state.generation) { state.dataLoading = false; state.notice = ''; updateUi(); }
+          if (generation === state.generation) {
+            state.dataLoading = false;
+            if (!background) state.notice = '';
+            updateUi();
+          }
         });
       }, stage => {
         if (generation !== state.generation || signal.aborted) return;
         state.lineStage = stage;
         state.lineLoading = true;
         state.lineError = state.lineErrorCode = state.notice = '';
-        recordDiagnostic(diagnostic, 'LINE', stage === 'login' ? 'LOGIN_WAIT' : 'INIT_WAIT');
         updateUi();
       }, lineFailed).catch(lineFailed).finally(() => {
         if (generation === state.generation) { state.lineLoading = false; updateUi(); }
@@ -726,6 +767,7 @@ SOFTWARE.
       if (dataTask) await dataTask;
     }
     async function share() {
+      expireCachedPreview();
       if ($('share').disabled || state.sharing || !state.message) return;
       state.sharing = true;
       state.success = false;
@@ -750,10 +792,16 @@ SOFTWARE.
         state.lineErrorCode = error.code || '';
       } finally {
         state.sharing = false;
+        if (state.pendingCard) {
+          const result = state.pendingCard;
+          state.pendingCard = null;
+          acceptCardResult(result);
+        }
+        expireCachedPreview();
         updateUi();
       }
     }
-    $('reload').addEventListener('click', () => { if (needsLineRestart()) restartLine(); else start(); });
+    $('reload').addEventListener('click', () => { if (needsLineRestart()) restartLine(); else start({ forceRefresh: true }); });
     $('retry').addEventListener('click', () => { if (needsLineRestart()) restartLine(); else start({ preserveLoaded: true }); });
     $('closeRecovery').addEventListener('click', closeForRecovery);
     $('share').addEventListener('click', share);
