@@ -41,7 +41,7 @@ SOFTWARE.
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
-  <meta name="share-page-version" content="2026-09-18-post-json-24h">
+  <meta name="share-page-version" content="2026-09-19-load-timing">
   <title>轉分享LINE名片</title>
   <link rel="preconnect" href="https://static.line-scdn.net" crossorigin>
   <link rel="preconnect" href="https://script.google.com">
@@ -73,6 +73,10 @@ SOFTWARE.
     .counter { width: 56px; text-align: center; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
     .notice { display: flex; gap: 8px; color: #67736c; margin: 0 0 20px; font-size: 13px; align-items: flex-start; }
     .notice .icon { width: 16px; height: 16px; margin-top: 3px; }
+    .timing-tools { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: -8px 0 16px; }
+    .timing-copy { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; font-size: 13px; }
+    .timing-status { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+    .timing-text { display: block; width: 100%; height: 180px; margin: 0 0 16px; padding: 10px; resize: vertical; border: 1px solid var(--line); border-radius: 4px; font: 13px/1.6 monospace; color: var(--ink); background: white; }
     .track { display: flex; align-items: stretch; justify-content: safe center; gap: 20px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: thin; padding: 6px 4px 18px; overscroll-behavior-x: contain; }
     .card { flex: 0 0 300px; width: 300px; max-width: calc(100vw - 64px); border: 1px solid #d9e1dc; border-radius: 8px; background: white; overflow: hidden; scroll-snap-align: center; box-shadow: 0 2px 5px #263e2f08; }
     .card-section { padding: 20px; }
@@ -140,6 +144,11 @@ SOFTWARE.
       </div>
     </div>
     <p class="notice"><span data-icon="info"></span><span>網頁預覽可能因網速、裝置、字型或 LINE 版本而有載入或排版差異，實際呈現以 LINE 收到的卡片為準。若無法預覽，請關閉頁面重新轉分享一次。</span></p>
+    <div class="timing-tools">
+      <span id="timingStatus" class="timing-status" role="status" aria-live="polite"></span>
+      <button id="copyTiming" class="secondary timing-copy" type="button" title="複製本頁載入測量結果"><span data-icon="copy"></span>複製測量結果</button>
+    </div>
+    <textarea id="timingText" class="timing-text" aria-label="測量結果" readonly spellcheck="false" hidden></textarea>
     <div id="error" class="error" role="alert" hidden><p id="errorText"></p><div class="recovery-actions"><button id="retry" class="secondary" type="button">重新讀取</button><button id="closeRecovery" class="secondary" type="button" hidden>關閉此頁</button></div></div>
     <p id="cacheNotice" class="image-warning" role="status" hidden></p>
     <div id="empty" class="empty-state" aria-live="polite"><span class="spinner" id="spinner" aria-hidden="true"></span><span id="emptyText">正在載入 LINE 元件…</span></div>
@@ -185,11 +194,129 @@ SOFTWARE.
     let restartTimer = null;
     let cacheExpiryTimer = null;
 
+    // Ephemeral, bounded measurements only. Never store URLs, payloads or raw errors.
+    const timingRuns = [];
+    const timingErrorCodes = new Set(['SDK_NETWORK', 'SDK_TIMEOUT', 'LINE_INIT_FAILED', 'LINE_INIT_TIMEOUT', 'LINE_LOGIN', 'LINE_LOGIN_TIMEOUT', 'LINE_UNAVAILABLE', 'LINE_SESSION_EXPIRED', 'CARD_NETWORK', 'CARD_TIMEOUT', 'CARD_RESPONSE', 'CARD_DATA', 'CARD_SERVER', 'CARD_LEGACY', 'CARD_CACHE_EXPIRED']);
+    let timingSequence = 0;
+    let currentTiming = null;
+    let copyingTiming = false;
+
+    function timingCode(error) {
+      return error && error.name === 'AbortError' ? 'ABORTED' : timingErrorCodes.has(error && error.code) ? error.code : 'UNKNOWN';
+    }
+    function timingError(run, error) {
+      if (!run || run.stoppedAt !== null) return;
+      const code = timingCode(error);
+      if (code !== 'ABORTED' && !run.errors.includes(code) && run.errors.length < 6) run.errors.push(code);
+    }
+    function beginTiming(forceRefresh) {
+      const now = performance.now();
+      const run = {
+        number: ++timingSequence, startedAt: now, startedUtc: new Date().toISOString(),
+        mode: forceRefresh ? '手動重新讀取' : timingSequence === 1 ? '首次開啟' : '再次讀取',
+        lineReused: !!linePromise, stages: { sdk: { start: now, end: null, result: '進行中' } },
+        lineStage: 'sdk', requests: [], errors: [], cache: '尚未檢查', cacheAgeMs: null,
+        backgroundRead: false, readyAt: null, readySource: '', readyHiddenMs: null,
+        hiddenMs: 0, hiddenSince: document.hidden ? now : null, stoppedAt: null
+      };
+      timingRuns.push(run);
+      if (timingRuns.length > 2) timingRuns.shift();
+      currentTiming = run;
+      return run;
+    }
+    function timingStageDone(run, name, result = '完成') {
+      const phase = run && run.stages[name];
+      if (!phase || phase.end !== null || run.stoppedAt !== null) return;
+      phase.end = performance.now();
+      phase.result = result;
+    }
+    function timingBackground(run, now = performance.now()) {
+      return run.hiddenMs + (run.hiddenSince === null ? 0 : Math.max(0, now - run.hiddenSince));
+    }
+    function stopTiming() {
+      const run = currentTiming;
+      if (!run || run.stoppedAt !== null) return;
+      const now = performance.now();
+      run.hiddenMs = timingBackground(run, now);
+      run.hiddenSince = null;
+      run.stoppedAt = now;
+      for (const phase of [...Object.values(run.stages), ...run.requests]) {
+        if (phase.end === null) { phase.end = now; phase.result = '已停止'; }
+      }
+    }
+    function recordTimingReady() {
+      const run = currentTiming;
+      if (!run || run.stoppedAt !== null || run.readyAt !== null || $('share').disabled) return;
+      run.readyAt = performance.now();
+      run.readyHiddenMs = timingBackground(run, run.readyAt);
+      run.readySource = state.fromCache ? '本機快取' : run.cache === '沿用本頁名片' ? '沿用本頁名片' : '網路取得';
+    }
+    function timingReport() {
+      const now = performance.now();
+      const seconds = ms => (Math.max(0, ms) / 1000).toFixed(3) + ' 秒';
+      const lines = ['轉分享載入測量', '版本：' + document.querySelector('meta[name="share-page-version"]').content];
+      for (const run of timingRuns) {
+        const until = run.stoppedAt === null ? now : run.stoppedAt;
+        const describe = phase => phase ? seconds((phase.end === null ? until : phase.end) - phase.start) + '（' + phase.result + '）' : '未開始';
+        lines.push('', '第 ' + run.number + ' 輪｜' + run.mode + '｜' + run.startedUtc);
+        if (run.number === 1) lines.push('本頁開始至程式啟動：' + seconds(run.startedAt));
+        lines.push('LINE 元件準備（含頁面就緒）：' + describe(run.stages.sdk));
+        lines.push('LINE 初始化' + (run.lineReused ? '（沿用已啟動流程）' : '') + '：' + describe(run.stages.init));
+        if (run.stages.login) lines.push('外部登入導向等待：' + describe(run.stages.login));
+        lines.push('本機名片：' + run.cache + (run.cacheAgeMs === null ? '' : '；快取年齡 ' + seconds(run.cacheAgeMs)));
+        lines.push('Google 名片讀取' + (run.backgroundRead ? '（背景更新）' : '') + '：' + describe(run.stages.card));
+        run.requests.forEach((request, index) => lines.push('  請求 ' + (index + 1) + ' ' + request.method + '：' + describe(request) + (request.code ? ' [' + request.code + ']' : '')));
+        lines.push('本輪開始至可分享：' + (run.readyAt === null ? '尚未可分享' : seconds(run.readyAt - run.startedAt) + '（' + run.readySource + '）'));
+        if (run.number === 1 && run.readyAt !== null) lines.push('本頁開始至可分享：' + seconds(run.readyAt));
+        lines.push('背景停留' + (run.readyAt === null ? '（截至本輪目前）' : '（至首次可分享）') + '：' + seconds(run.readyHiddenMs === null ? timingBackground(run, until) : run.readyHiddenMs));
+        lines.push('觀察到的錯誤代碼：' + (run.errors.join(', ') || '無'));
+      }
+      lines.push('', '僅本頁最近兩輪；時間包含網路、轉址與重試，不等於 Google 純執行時間。', '未包含開啟本頁前的 LINE 跳轉、圖片全部下載、選擇好友及傳送時間。');
+      return lines.join('\n');
+    }
+    async function copyTiming() {
+      if (copyingTiming) return;
+      copyingTiming = true;
+      $('copyTiming').disabled = true;
+      const report = timingReport();
+      $('timingText').hidden = true;
+      $('timingText').value = '';
+      $('timingStatus').textContent = '正在複製…';
+      try {
+        if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') throw new Error('Clipboard unavailable');
+        await navigator.clipboard.writeText(report);
+        $('timingStatus').textContent = '已複製';
+      } catch {
+        $('timingStatus').textContent = '無法自動複製';
+        const field = $('timingText');
+        field.value = report;
+        field.hidden = false;
+        field.focus();
+        field.select();
+        field.setSelectionRange(0, report.length);
+        field.scrollTop = 0;
+      } finally {
+        copyingTiming = false;
+        $('copyTiming').disabled = false;
+      }
+    }
+    document.addEventListener('visibilitychange', () => {
+      const run = currentTiming;
+      if (!run || run.stoppedAt !== null) return;
+      const now = performance.now();
+      if (document.hidden && run.hiddenSince === null) run.hiddenSince = now;
+      else if (!document.hidden && run.hiddenSince !== null) {
+        run.hiddenMs += Math.max(0, now - run.hiddenSince);
+        run.hiddenSince = null;
+      }
+    });
+
     // Lucide icons (ISC license), bundled to avoid another network dependency.
     const icons = {
       share: [['circle', {cx:18,cy:5,r:3}],['circle',{cx:6,cy:12,r:3}],['circle',{cx:18,cy:19,r:3}],['line',{x1:8.59,x2:15.42,y1:13.51,y2:17.49}],['line',{x1:15.41,x2:8.59,y1:6.51,y2:10.49}]],
       refresh: [['path',{d:'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8'}],['path',{d:'M21 3v5h-5'}],['path',{d:'M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16'}],['path',{d:'M8 16H3v5'}]],
       left: [['path',{d:'m15 18-6-6 6-6'}]], right: [['path',{d:'m9 18 6-6-6-6'}]],
+      copy: [['rect',{width:14,height:14,x:8,y:8,rx:2,ry:2}],['path',{d:'M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'}]],
       info: [['circle',{cx:12,cy:12,r:10}],['path',{d:'M12 16v-4'}],['path',{d:'M12 8h.01'}]]
     };
     document.querySelectorAll('[data-icon]').forEach(host => {
@@ -334,7 +461,7 @@ SOFTWARE.
       await timeout(linePromise, READ_TIMEOUT_MS, loadError('LINE_INIT_TIMEOUT', 'LINE 登入連線逾時。請按「重新開啟 LINE」重建連線；若仍無反應，請關閉此頁後，從名片再次點選轉分享。尚未傳送任何名片。'), signal);
       return initialized;
     }
-    function loadShareCard(signal, onRecovery) {
+    function loadShareCard(signal, onRecovery, timing) {
       return new Promise((resolve, reject) => {
         const controller = new AbortController();
         const startedAt = performance.now();
@@ -344,9 +471,15 @@ SOFTWARE.
         let invalidResponse = null;
         let deadlineTimer;
         let recoveryTimer;
+        if (timing) timing.stages.card = { start: startedAt, end: null, result: '進行中' };
         function finish(error, value) {
           if (settled) return;
           settled = true;
+          timingStageDone(timing, 'card', error ? timingCode(error) === 'ABORTED' ? '已停止' : '失敗' : '完成');
+          if (error) timingError(timing, error);
+          if (timing) for (const request of timing.requests) {
+            if (request.end === null) { request.end = performance.now(); request.result = '已停止'; }
+          }
           clearTimeout(deadlineTimer);
           clearTimeout(recoveryTimer);
           signal.removeEventListener('abort', abort);
@@ -368,9 +501,18 @@ SOFTWARE.
           clearTimeout(recoveryTimer);
           attempts++;
           pending++;
+          const measurement = { start: performance.now(), end: null, result: '進行中', method: attempts === 1 ? 'POST' : 'JSONP', code: '' };
+          if (timing) timing.requests.push(measurement);
+          function measured(error) {
+            if (measurement.end !== null) return;
+            measurement.end = performance.now();
+            measurement.result = error ? '失敗' : '完成';
+            if (error) { measurement.code = timingCode(error); timingError(timing, error); }
+          }
           if (attempts > 1) onRecovery(attempts, 0);
           // Try POST first; bounded recovery uses the existing JSONP endpoint.
-          requestShareCard(controller.signal, attempts > 1).then(message => finish(null, message), error => {
+          requestShareCard(controller.signal, attempts > 1).then(message => { measured(); finish(null, message); }, error => {
+            measured(error);
             pending--;
             if (settled) return;
             if (!error.retryable) invalidResponse = error;
@@ -658,6 +800,7 @@ SOFTWARE.
       try { return !!lineSdk && lineSdk.isInClient(); } catch { return false; }
     }
     function stopPendingLoads() {
+      stopTiming();
       state.generation++;
       if (state.controller) state.controller.abort();
       clearTimeout(slowTimer);
@@ -700,6 +843,7 @@ SOFTWARE.
       const restart = needsLineRestart();
       const failure = [state.lineError, state.dataError].filter(Boolean).join('\n');
       $('share').disabled = !state.message || !state.lineReady || loading || state.sharing || state.restarting || !!failure || (state.fromCache && !cacheIsCurrent(state.cachedAt));
+      recordTimingReady();
       $('reload').disabled = (loading && !restart) || state.sharing || state.restarting;
       $('reload').title = restart ? '重新開啟 LINE' : '重新讀取名片';
       $('reload').setAttribute('aria-label', $('reload').title);
@@ -724,6 +868,7 @@ SOFTWARE.
       if (state.sharing || state.restarting) return;
       stopPendingLoads();
       const generation = state.generation;
+      const timing = beginTiming(forceRefresh);
       state.controller = new AbortController();
       if (forceRefresh) clearCardCache();
       if (forceRefresh || !preserveLoaded || (state.fromCache && !cacheIsCurrent(state.cachedAt))) clearPreview();
@@ -754,6 +899,9 @@ SOFTWARE.
       let dataTask = null;
       const lineFailed = error => {
         if (generation !== state.generation || signal.aborted || error.name === 'AbortError') return;
+        timingError(timing, error);
+        if (error.code === 'LINE_INIT_TIMEOUT') timing.stages[timing.lineStage].result = '已逾時，仍等待';
+        else timingStageDone(timing, timing.lineStage, '失敗');
         state.lineLoading = false;
         state.lineError = errorText(error);
         state.lineErrorCode = error.code || '';
@@ -761,6 +909,7 @@ SOFTWARE.
       };
       const lineTask = prepareLine(signal, client => {
         if (generation !== state.generation || signal.aborted || dataTask) return;
+        timingStageDone(timing, timing.lineStage);
         state.lineReady = true;
         state.lineClient = client;
         state.lineLoading = false;
@@ -768,14 +917,17 @@ SOFTWARE.
         state.notice = '';
         const retained = !!state.message;
         const cached = !retained && !forceRefresh ? readCardCache() : null;
+        timing.cache = forceRefresh ? '手動略過' : retained ? '沿用本頁名片' : cached ? '有效快取' : '未命中或不可用';
+        if (cached || (retained && state.fromCache)) timing.cacheAgeMs = Math.max(0, Date.now() - (cached ? cached.savedAt : state.cachedAt));
         if (cached) applyCard(cached.message, cached.savedAt, true);
         else if (retained && state.fromCache) applyCard(state.message, state.cachedAt, true);
         state.dataLoading = !retained || state.fromCache;
         updateUi();
         if (!state.dataLoading) { dataTask = Promise.resolve(); return; }
         const background = !!state.message;
+        timing.backgroundRead = background;
         // Cached previews do not delay sharing; refresh only after LINE is ready.
-        dataTask = loadShareCard(signal, reportRetry).then(message => {
+        dataTask = loadShareCard(signal, reportRetry, timing).then(message => {
           if (generation !== state.generation || signal.aborted) return;
           const savedAt = Date.now();
           writeCardCache(message, savedAt);
@@ -791,6 +943,9 @@ SOFTWARE.
         });
       }, stage => {
         if (generation !== state.generation || signal.aborted) return;
+        timingStageDone(timing, timing.lineStage);
+        timing.lineStage = stage;
+        timing.stages[stage] = { start: performance.now(), end: null, result: '進行中' };
         state.lineStage = stage;
         state.lineLoading = true;
         state.lineError = state.lineErrorCode = state.notice = '';
@@ -836,6 +991,7 @@ SOFTWARE.
         updateUi();
       }
     }
+    $('copyTiming').addEventListener('click', copyTiming);
     $('reload').addEventListener('click', () => { if (needsLineRestart()) restartLine(); else start({ forceRefresh: true }); });
     $('retry').addEventListener('click', () => { if (needsLineRestart()) restartLine(); else start({ preserveLoaded: true }); });
     $('closeRecovery').addEventListener('click', closeForRecovery);
